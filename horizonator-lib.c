@@ -29,6 +29,16 @@
 #define OSM_TILE_TEXTURE_NAME_DEFAULT    "mapnik"
 #define OSM_TILE_TEXTURE_URL_FMT_DEFAULT "https://tile.openstreetmap.org/%d/%d/%d.png"
 
+// Used by restrict_mesh_azimuth (see horizonator_init()). Cells beyond this
+// azimuth margin outside [mesh_az_deg0,mesh_az_deg1] are skipped when
+// building the mesh
+#define MESH_AZIMUTH_MARGIN_DEG   5.0f
+// Cells within this many DEM cells of the viewer are always meshed,
+// regardless of azimuth: right next to the viewer, azimuth changes very
+// quickly from one cell to the next, so an azimuth-only test is unreliable
+// there. This inner disk is cheap to mesh in full regardless
+#define MESH_INNER_RADIUS_CELLS   100
+
 #define assert_opengl()                                 \
     do {                                                \
         int error = glGetError();                       \
@@ -74,6 +84,9 @@ bool horizonator_init( // output
                        int offscreen_width, int offscreen_height,
                        int render_radius_cells, // This should be given >0
                        float render_radius_m,   // or this, but not both
+
+                       bool restrict_mesh_azimuth,
+                       float mesh_az_deg0, float mesh_az_deg1,
 
                        bool use_glut,
                        bool render_texture,
@@ -493,6 +506,65 @@ bool horizonator_init( // output
         assert( vertex_buf_idx == Nvertices*3 );
     }
 
+    // Optional azimuth restriction: precompute, for each DEM cell, whether
+    // it lies within [mesh_az_deg0,mesh_az_deg1] (plus a margin), or close
+    // enough to the viewer to always be included. NULL means "no
+    // restriction: mesh the whole loaded circle", to keep the existing
+    // behavior for callers that don't ask for this (e.g. the interactive
+    // tool, which lets the user pan beyond the initial view)
+    uint8_t* cell_in_view = NULL;
+    if(restrict_mesh_azimuth)
+    {
+        cell_in_view = malloc((size_t)(2*render_radius_cells) * (size_t)(2*render_radius_cells));
+        if(cell_in_view == NULL)
+        {
+            MSG("malloc(cell_in_view) failed");
+            goto done;
+        }
+
+        // Same formula as horizonator_move() uses to place the viewer
+        // within the loaded cell grid
+        const float viewer_cell_i =
+            (viewer_lon - ctx->dems.origin_dem_lon_lat[0]) * ctx->dems.cells_per_deg -
+            ctx->dems.origin_dem_cellij[0];
+        const float viewer_cell_j =
+            (viewer_lat - ctx->dems.origin_dem_lon_lat[1]) * ctx->dems.cells_per_deg -
+            ctx->dems.origin_dem_cellij[1];
+        const float cos_viewer_lat_local = cosf(viewer_lat * (float)M_PI/180.0f);
+
+        const float az_center = (mesh_az_deg0 + mesh_az_deg1)/2.0f;
+        const float az_lo     = mesh_az_deg0 - MESH_AZIMUTH_MARGIN_DEG;
+        const float az_hi     = mesh_az_deg1 + MESH_AZIMUTH_MARGIN_DEG;
+
+        const int W = 2*render_radius_cells;
+        for(int j=0; j<W; j++)
+            for(int i=0; i<W; i++)
+            {
+                const float di = (float)i - viewer_cell_i;
+                const float dj = (float)j - viewer_cell_j;
+
+                bool in_view;
+                if(fabsf(di) <= MESH_INNER_RADIUS_CELLS && fabsf(dj) <= MESH_INNER_RADIUS_CELLS)
+                    in_view = true;
+                else
+                {
+                    // Same azimuth definition as vertex.glsl: 0 = North, 90 = East
+                    float az_deg = atan2f(di*cos_viewer_lat_local, dj) * 180.0f/(float)M_PI;
+
+                    // Unwrap az_deg to within 180 of az_center, to handle
+                    // the +-180 wraparound correctly regardless of where
+                    // az_center falls
+                    float d = az_deg - az_center;
+                    d -= 360.0f * roundf(d/360.0f);
+                    az_deg = az_center + d;
+
+                    in_view = (az_deg >= az_lo && az_deg <= az_hi);
+                }
+
+                cell_in_view[j*W + i] = in_view ? 1 : 0;
+            }
+    }
+
     // indices
     {
         GLuint indexBufID;
@@ -502,10 +574,25 @@ bool horizonator_init( // output
 
         GLuint* indices = glMapBuffer(GL_ELEMENT_ARRAY_BUFFER, GL_WRITE_ONLY);
         int idx = 0;
+        const int W = 2*render_radius_cells;
         for( int j=0; j<(2*render_radius_cells-1); j++ )
         {
             for( int i=0; i<(2*render_radius_cells-1); i++ )
             {
+                if(cell_in_view != NULL)
+                {
+                    // Skip this quad entirely unless at least one of its 4
+                    // corners is in view. This may keep a thin sliver of
+                    // extra triangles right at the boundary; that's fine
+                    bool any_in_view =
+                        cell_in_view[(j+0)*W + (i+0)] ||
+                        cell_in_view[(j+1)*W + (i+1)] ||
+                        cell_in_view[(j+1)*W + (i+0)] ||
+                        cell_in_view[(j+0)*W + (i+1)];
+                    if(!any_in_view)
+                        continue;
+                }
+
                 indices[idx++] = (j + 0)*(2*render_radius_cells) + (i + 0);
                 indices[idx++] = (j + 1)*(2*render_radius_cells) + (i + 1);
                 indices[idx++] = (j + 1)*(2*render_radius_cells) + (i + 0);
@@ -517,7 +604,13 @@ bool horizonator_init( // output
         }
         int res = glUnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
         assert( res == GL_TRUE );
-        assert(idx == ctx->Ntriangles*3);
+        assert(idx <= ctx->Ntriangles*3);
+
+        // cell_in_view may have shrunk the actual triangle count below the
+        // worst-case estimate used to size the buffer above
+        ctx->Ntriangles = idx/3;
+
+        free(cell_in_view);
     }
 
     // shaders

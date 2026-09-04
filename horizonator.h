@@ -82,6 +82,18 @@ static bool horizonator_context_isvalid(const horizonator_context_t* ctx)
 // SRTM1 selects between 1" SRTM and 3" SRTM. Currently every triangle is
 // rendered, so 1" SRTM tiles can easily overload the machine. Unless you need
 // the extra resolution, stick with 3" SRTM tiles for now
+//
+// By default the mesh covers the full circle of loaded DEM data (radius
+// render_radius_cells/render_radius_m), even though a given render usually
+// only looks at a fraction of that circle (see horizonator_pan_zoom()). If
+// restrict_mesh_azimuth is true, the mesh is built only for the
+// [mesh_az_deg0,mesh_az_deg1] azimuth wedge (plus a small margin), which can
+// dramatically cut the triangle count for a narrow panorama. This trades
+// away the ability to horizonator_pan_zoom() outside that wedge later
+// without gaps in the mesh, so it should only be used when the caller knows
+// it will never look outside that wedge (e.g. the "standalone" tool, which
+// renders one fixed view). Leave false for callers that let the user pan
+// around after loading (e.g. the interactive "horizonator" tool)
 bool horizonator_init( // output
                        horizonator_context_t* ctx,
 
@@ -95,6 +107,9 @@ bool horizonator_init( // output
                        int offscreen_width, int offscreen_height,
                        int render_radius_cells, // This should be given >0
                        float render_radius_m,   // or this, but not both
+
+                       bool restrict_mesh_azimuth,
+                       float mesh_az_deg0, float mesh_az_deg1, // ignored unless restrict_mesh_azimuth
 
                        bool use_glut,
                        bool render_texture,
