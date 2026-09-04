@@ -591,7 +591,8 @@ int main(int argc, char* argv[])
                      lat, lon,
                      az_center_deg-az_radius_deg,
                      az_center_deg+az_radius_deg,
-                     viewer_z);
+                     viewer_z,
+                     curvature_enabled, refraction_k);
         }
 
         free(pool);

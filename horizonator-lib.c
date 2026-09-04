@@ -792,6 +792,14 @@ void horizonator_deinit( horizonator_context_t* ctx )
         glutDestroyWindow(ctx->glut_window);
         ctx->glut_window = 0;
     }
+
+    // Was leaked previously: the DEM files stay mmap-ed (and their pages
+    // resident, once touched by horizonator_dem_sample()) until this is
+    // called. This matters most for a process that calls
+    // horizonator_init()/horizonator_deinit() in a loop (e.g. to render
+    // several tiles one at a time): without this, memory use grows
+    // unboundedly across iterations
+    horizonator_dem_deinit(&ctx->dems);
 }
 
 bool horizonator_move(horizonator_context_t* ctx,
@@ -1233,7 +1241,10 @@ bool horizonator_project( // output
                           double az_rad0,
                           double az_rad1,
                           int width,
-                          int height)
+                          int height,
+
+                          bool curvature_enabled,
+                          double refraction_k)
 {
     const float Rearth = 6371000.0;
 
@@ -1262,9 +1273,16 @@ bool horizonator_project( // output
 
     // The projection code is mostly lifted from vertex.glsl. Would be nice to
     // consolidate
-    const double h           = ele - ele_viewer;
     const double distance_ne = sqrt(distance_sq_ne);
-    *range                   = sqrt(distance_sq_ne + h*h);
+
+    // Same curvature-and-refraction correction as vertex.glsl. Must match,
+    // or this projection won't agree with the actual render
+    const double drop =
+        curvature_enabled ?
+        (1.0 - refraction_k) * distance_sq_ne / (2.0*Rearth) : 0.0;
+    const double h = (ele - ele_viewer) - drop;
+
+    *range = sqrt(distance_sq_ne + h*h);
 
     const double aspect = (double)width / (double)height;
     const double el_ndc = atan2(h, distance_ne) * aspect * az_ndc_per_rad;

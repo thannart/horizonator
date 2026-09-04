@@ -203,6 +203,11 @@ bool horizonator_x_from_az( // output
                             double az_rad1,
                             int width);
 
+// curvature_enabled/refraction_k must match whatever was passed to
+// horizonator_set_curvature() for the render being annotated -- otherwise
+// the predicted screen position of (lat,lon,ele) will be off by the
+// curvature drop (can be >1km of apparent height at 100+km), and this will
+// incorrectly look occluded/unmatched
 bool horizonator_project( // output
                           double* x,
                           double* y,
@@ -219,7 +224,10 @@ bool horizonator_project( // output
                           double az_rad0,
                           double az_rad1,
                           int width,
-                          int height);
+                          int height,
+
+                          bool curvature_enabled,
+                          double refraction_k);
 
 bool horizonator_unproject(// output
                            float* lat, float* lon,
