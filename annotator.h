@@ -28,4 +28,9 @@ bool annotate(// input
               // for this render, or POIs will be placed incorrectly and fail
               // to be found in the range image (looking occluded)
               const bool   curvature_enabled,
-              const double refraction_k);
+              const double refraction_k,
+
+              // POIs farther than this are never labelled. Pass the same
+              // zfar used for the render: there's no point labelling
+              // something farther than what was actually rendered
+              const double max_marker_dist_m);

@@ -16,7 +16,6 @@
 #include "horizonator.h"
 
 
-#define MAX_MARKER_DIST 100000.0
 #define MIN_MARKER_DIST 500.0
 
 #define FUZZ_RANGE   500.
@@ -157,7 +156,12 @@ bool annotate(// input
               const double ele_m,
 
               const bool   curvature_enabled,
-              const double refraction_k)
+              const double refraction_k,
+
+              // POIs farther than this are never labelled. Pass the same
+              // zfar used for the render: there's no point labelling
+              // something farther than what was actually rendered
+              const double max_marker_dist_m)
 {
   bool result = false;
 
@@ -300,7 +304,7 @@ bool annotate(// input
           continue;
 
       if(range_have < MIN_MARKER_DIST ||
-         range_have > MAX_MARKER_DIST )
+         range_have > max_marker_dist_m )
           // too close or too far to label
           continue;
 
