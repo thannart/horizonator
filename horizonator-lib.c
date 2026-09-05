@@ -198,7 +198,7 @@ bool horizonator_init( // output
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
-    glClearColor(0, 0, 1, 0);
+    glClearColor(1, 1, 1, 0);
 
     if( !horizonator_dem_init( &ctx->dems,
                    viewer_lat, viewer_lon,

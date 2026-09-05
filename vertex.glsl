@@ -37,6 +37,11 @@ out vec2 tex;
 const float Rearth = 6371000.0;
 const float pi     = 3.14159265358979;
 
+// Terrain grayscale gradient: near terrain is darker, far terrain fades
+// towards the (white) background, udeuschle.de-style
+const float GRAY_NEAR = 0.30;
+const float GRAY_FAR  = 0.92;
+
 // Unwraps an angle x to lie within pi of an angle near. All angles in radians
 float unwrap_near_rad(float x, float near)
 {
@@ -177,8 +182,8 @@ void main(void)
                             1.0 );
     }
 
-    rgb.r = max(min((distance_ne - znear_color) / (zfar_color - znear_color),
-                    1.0), 0.0);
-    rgb.g = 0.;
-    rgb.b = 0.;
+    float t = clamp((distance_ne - znear_color) / (zfar_color - znear_color),
+                    0.0, 1.0);
+    float gray = mix(GRAY_NEAR, GRAY_FAR, t);
+    rgb = vec3(gray, gray, gray);
 }
