@@ -34,6 +34,7 @@ typedef struct
     int32_t uniform_znear, uniform_zfar;
     int32_t uniform_znear_color, uniform_zfar_color;
     int32_t uniform_curvature_scale, uniform_refraction_k;
+    int32_t uniform_shading_scale, uniform_sun_dir;
 
     uint32_t program;
 
@@ -164,6 +165,18 @@ bool horizonator_set_zextents(horizonator_context_t* ctx,
 bool horizonator_set_curvature(horizonator_context_t* ctx,
                                bool curvature_enabled,
                                float refraction_k);
+
+// Enables/disables slope shading: each triangle is darkened/lightened by
+// a flat-shaded directional light, based on its face normal. When
+// shading_enabled is false (the default set by horizonator_init()),
+// rendering is unchanged (the plain distance-based grayscale). sun_az_deg
+// (0=North, 90=East) and sun_el_deg (0=horizon, 90=straight up) give the
+// direction TOWARDS the sun; both are ignored when shading_enabled is
+// false
+bool horizonator_set_sun(horizonator_context_t* ctx,
+                         bool shading_enabled,
+                         float sun_az_deg,
+                         float sun_el_deg);
 
 bool horizonator_redraw(const horizonator_context_t* ctx);
 

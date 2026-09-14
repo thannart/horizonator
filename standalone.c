@@ -64,6 +64,7 @@ static bool glut_loop( bool render_texture, bool SRTM1,
                        float viewer_lat, float viewer_lon,
                        float viewer_height_m,
                        bool curvature_enabled, float refraction_k,
+                       bool shading_enabled, float sun_az_deg, float sun_el_deg,
                        bool restrict_mesh_azimuth,
 
                        // Bounds of the view. We expect az_deg1 > az_deg0. The azimuth
@@ -113,6 +114,9 @@ static bool glut_loop( bool render_texture, bool SRTM1,
     }
 
     if(!horizonator_set_curvature(&ctx, curvature_enabled, refraction_k))
+        return false;
+
+    if(!horizonator_set_sun(&ctx, shading_enabled, sun_az_deg, sun_el_deg))
         return false;
 
     if(!horizonator_set_zextents(&ctx,
@@ -185,6 +189,7 @@ int main(int argc, char* argv[])
         "   [--allow-tile-downloads]\n"
         "   [--viewer-height METERS]\n"
         "   [--curvature] [--refraction-k K]\n"
+        "   [--shading] [--sun-azimuth DEG] [--sun-elevation DEG]\n"
         "   [--no-restrict-mesh-azimuth]\n"
         "   [--no-ridge-lines] [--ridge-line-threshold METERS] [--ridge-line-gray FRACTION]\n"
         "   [--label-font-size-pt POINTS]\n"
@@ -250,6 +255,17 @@ int main(int argc, char* argv[])
         "--curvature is also given. k=0 is pure geometric curvature, with no\n"
         "refraction compensation (peaks look their lowest); increasing k\n"
         "raises them back up somewhat, closer to the flat-plane render.\n"
+        "\n"
+        "=== Slope shading ===\n"
+        "\n"
+        "By default terrain is colored purely by distance (see COLOR below),\n"
+        "with no directional lighting. Pass --shading to darken/lighten the\n"
+        "relief by a directional light, based on a smoothly-interpolated\n"
+        "per-vertex surface normal (estimated from the DEM), giving the\n"
+        "relief a 3D appearance. --sun-azimuth (default 135, i.e. SE) and\n"
+        "--sun-elevation (default 45deg above the horizon) set the direction\n"
+        "the light comes from; both are ignored unless --shading is given.\n"
+        "A slope facing away from the sun is dimmed, never made fully black.\n"
         "\n"
         "=== Color and ridge outlines ===\n"
         "\n"
@@ -366,6 +382,9 @@ int main(int argc, char* argv[])
         { "viewer-height",     required_argument, NULL, 'V' },
         { "curvature",         no_argument,       NULL, 'C' },
         { "refraction-k",      required_argument, NULL, 'k' },
+        { "shading",            no_argument,       NULL, 's' },
+        { "sun-azimuth",        required_argument, NULL, 'A' },
+        { "sun-elevation",      required_argument, NULL, 'E' },
         { "no-restrict-mesh-azimuth", no_argument, NULL, 'M' },
         { "no-ridge-lines",     no_argument,       NULL, 'R' },
         { "ridge-line-threshold", required_argument, NULL, 'r' },
@@ -395,6 +414,9 @@ int main(int argc, char* argv[])
     float       viewer_height_m     = 0.0f;
     bool        curvature_enabled   = false;
     float       refraction_k        = 0.13f;
+    bool        shading_enabled     = false;
+    float       sun_az_deg          = 135.0f;
+    float       sun_el_deg          = 45.0f;
     bool        restrict_mesh_azimuth = true;
     bool        ridge_lines          = true;
     float       ridge_line_threshold_m = 500.0f;
@@ -529,6 +551,18 @@ int main(int argc, char* argv[])
             refraction_k = (float)atof(optarg);
             break;
 
+        case 's':
+            shading_enabled = true;
+            break;
+
+        case 'A':
+            sun_az_deg = (float)atof(optarg);
+            break;
+
+        case 'E':
+            sun_el_deg = (float)atof(optarg);
+            break;
+
         case 'M':
             restrict_mesh_azimuth = false;
             break;
@@ -614,6 +648,7 @@ int main(int argc, char* argv[])
                   lat, lon,
                   viewer_height_m,
                   curvature_enabled, refraction_k,
+                  shading_enabled, sun_az_deg, sun_el_deg,
                   restrict_mesh_azimuth,
                   az_center_deg-az_radius_deg,
                   az_center_deg+az_radius_deg,
@@ -707,6 +742,9 @@ int main(int argc, char* argv[])
     }
 
     if(!horizonator_set_curvature(&ctx, curvature_enabled, refraction_k))
+        return false;
+
+    if(!horizonator_set_sun(&ctx, shading_enabled, sun_az_deg, sun_el_deg))
         return false;
 
     if(!horizonator_set_zextents(&ctx,

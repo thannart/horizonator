@@ -452,7 +452,31 @@ bool horizonator_init( // output
         GLshort* vertices = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
 #endif
 
+        // Per-vertex normal, for smooth (Gouraud-style) slope shading: the
+        // rasterizer interpolates this across each triangle, so shading is
+        // continuous across triangle edges (no visible facets), unlike a
+        // flat per-triangle normal. Estimated by finite differences on the
+        // 4 DEM neighbors -- needs real (not integer-quantized) precision,
+        // so this is its own float VBO rather than packed into the
+        // position one above
+        GLuint normalBufID;
+        glGenBuffers(1, &normalBufID);
+        glBindBuffer(GL_ARRAY_BUFFER, normalBufID);
+        glEnableVertexAttribArray(1);
+        glBufferData(GL_ARRAY_BUFFER, Nvertices*3*sizeof(GLfloat), NULL, GL_STATIC_DRAW);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, NULL);
+        GLfloat* normals = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
+
+        // meters/cell, East-West and North-South. Same formula as the
+        // (disabled) CPU-side paths below, factored out since the normal
+        // computation needs it on every vertex
+        const float Rearth          = 6371000.0f;
+        const float cos_viewer_lat_here = cosf( M_PI / 180.0f * viewer_lat );
+        const float cellsize_ns     = Rearth * (float)(M_PI/180.0) / (float)ctx->dems.cells_per_deg;
+        const float cellsize_ew     = cellsize_ns * cos_viewer_lat_here;
+
         int vertex_buf_idx = 0;
+        int normal_buf_idx = 0;
 
         for( int j=0; j<2*render_radius_cells; j++ )
         {
@@ -498,10 +522,49 @@ bool horizonator_init( // output
                 vertices[vertex_buf_idx++] = j;
                 vertices[vertex_buf_idx++] = z;
 #endif
+
+                // Finite-difference normal from the 4 DEM neighbors
+                // (clamped at the edges of the loaded grid, where a
+                // neighbor is missing: falls back to a one-sided
+                // difference there instead of a centered one)
+                int i_prev = i>0                    ? i-1 : i;
+                int i_next = i<2*render_radius_cells-1 ? i+1 : i;
+                int j_prev = j>0                    ? j-1 : j;
+                int j_next = j<2*render_radius_cells-1 ? j+1 : j;
+
+                int32_t z_i_prev = horizonator_dem_sample(&ctx->dems, i_prev, j);
+                int32_t z_i_next = horizonator_dem_sample(&ctx->dems, i_next, j);
+                int32_t z_j_prev = horizonator_dem_sample(&ctx->dems, i, j_prev);
+                int32_t z_j_next = horizonator_dem_sample(&ctx->dems, i, j_next);
+
+                // Tangent vectors along the East and North grid directions
+                // (in meters), and the cross product of the two (East x
+                // North = Up, in a right-handed ENU frame -- so this always
+                // comes out pointing "up", no sign ambiguity to resolve,
+                // unlike a per-triangle normal from arbitrarily-wound
+                // vertices)
+                float tangent_east_x  = (float)(i_next - i_prev) * cellsize_ew;
+                float tangent_east_z  = (float)(z_i_next - z_i_prev);
+                float tangent_north_y = (float)(j_next - j_prev) * cellsize_ns;
+                float tangent_north_z = (float)(z_j_next - z_j_prev);
+
+                float nx = -tangent_east_z * tangent_north_y;
+                float ny = -tangent_east_x * tangent_north_z;
+                float nz =  tangent_east_x * tangent_north_y;
+
+                float ninv = 1.0f / sqrtf(nx*nx + ny*ny + nz*nz);
+                normals[normal_buf_idx++] = nx*ninv;
+                normals[normal_buf_idx++] = ny*ninv;
+                normals[normal_buf_idx++] = nz*ninv;
             }
         }
 
         int res = glUnmapBuffer(GL_ARRAY_BUFFER);
+        assert( res == GL_TRUE );
+        assert( normal_buf_idx == Nvertices*3 );
+
+        glBindBuffer(GL_ARRAY_BUFFER, vertexBufID);
+        res = glUnmapBuffer(GL_ARRAY_BUFFER);
         assert( res == GL_TRUE );
         assert( vertex_buf_idx == Nvertices*3 );
     }
@@ -709,6 +772,8 @@ bool horizonator_init( // output
         ctx->uniform_zfar_color       = glGetUniformLocation(ctx->program, "zfar_color");       assert_opengl();
         ctx->uniform_curvature_scale  = glGetUniformLocation(ctx->program, "curvature_scale");  assert_opengl();
         ctx->uniform_refraction_k     = glGetUniformLocation(ctx->program, "refraction_k");     assert_opengl();
+        ctx->uniform_shading_scale    = glGetUniformLocation(ctx->program, "shading_scale");    assert_opengl();
+        ctx->uniform_sun_dir          = glGetUniformLocation(ctx->program, "sun_dir");          assert_opengl();
 #undef make_and_set_uniform
 
         // And I set the other uniforms
@@ -718,6 +783,8 @@ bool horizonator_init( // output
                                  HORIZONATOR_ZNEAR_DEFAULT, HORIZONATOR_ZFAR_DEFAULT);
         // Curvature correction is off by default: unchanged legacy behavior
         horizonator_set_curvature(ctx, false, 0.13f);
+        // Slope shading is off by default: unchanged legacy behavior
+        horizonator_set_sun(ctx, false, 135.0f, 45.0f);
     }
 
     if(offscreen_width > 0)
@@ -1011,6 +1078,33 @@ bool horizonator_set_curvature(horizonator_context_t* ctx,
 
     glUniform1f( ctx->uniform_curvature_scale, curvature_enabled ? 1.0f : 0.0f); assert_opengl();
     glUniform1f( ctx->uniform_refraction_k,    refraction_k);                    assert_opengl();
+
+    return true;
+}
+
+bool horizonator_set_sun(horizonator_context_t* ctx,
+                         bool shading_enabled,
+                         float sun_az_deg,
+                         float sun_el_deg)
+{
+    if(ctx->use_glut)
+    {
+        if(ctx->glut_window == 0)
+            return false;
+        glutSetWindow(ctx->glut_window);
+    }
+
+    // Same (east,north,height) convention as vertex.glsl: az=0 is North,
+    // az=90 is East (az_rad = atan(east,north) there)
+    const float az_rad = sun_az_deg * (float)M_PI/180.0f;
+    const float el_rad = sun_el_deg * (float)M_PI/180.0f;
+    const float cos_el = cos(el_rad);
+    const float east    = cos_el * sin(az_rad);
+    const float north   = cos_el * cos(az_rad);
+    const float height  = sin(el_rad);
+
+    glUniform1f( ctx->uniform_shading_scale, shading_enabled ? 1.0f : 0.0f); assert_opengl();
+    glUniform3f( ctx->uniform_sun_dir,       east, north, height);           assert_opengl();
 
     return true;
 }
