@@ -187,6 +187,8 @@ int main(int argc, char* argv[])
         "   [--curvature] [--refraction-k K]\n"
         "   [--no-restrict-mesh-azimuth]\n"
         "   [--no-ridge-lines] [--ridge-line-threshold METERS] [--ridge-line-gray FRACTION]\n"
+        "   [--label-font-size-pt POINTS]\n"
+        "   [--list-visible-peaks OUT.txt]\n"
         "   [--znear ZNEAR] [--zfar ZFAR] [--znear-color ZNEARCOLOR] [--zfar-color ZFARCOLOR]\n"
         "   [--dirdems DIRECTORY] [--dirtiles DIRECTORY] [--tiles NAME=FMT]\n"
         "   LAT LON AZ_CENTER_DEG AZ_RADIUS_DEG\n"
@@ -277,16 +279,41 @@ int main(int argc, char* argv[])
         "If --texture, we use a set of image tiles to texture the render\n"
         "instead of any of the above color-coding.\n"
         "\n"
-        "=== Peak labels (PDF/SVG output only) ===\n"
+        "=== Peak labels ===\n"
         "\n"
         "See query-peaks-from-osm.py to generate the compiled-in list of\n"
         "named peaks (a poi_t[] #included by this file -- edit the #include\n"
-        "line to point at your own generated file). Only peaks that are (a)\n"
-        "actually visible in the rendered range image, (b) farther than 500m,\n"
-        "and (c) no farther than --zfar are labelled. --viewer-height and\n"
-        "--curvature/--refraction-k affect where a peak is predicted to land\n"
-        "on screen; this tool always uses the same values for the render and\n"
-        "for the labelling, so there's nothing extra to keep in sync here.\n"
+        "line to point at your own generated file). A peak counts as visible\n"
+        "if it's (a) actually found in the rendered range image (not\n"
+        "occluded by closer terrain), (b) farther than 500m, and (c) no\n"
+        "farther than --zfar. --viewer-height and --curvature/--refraction-k\n"
+        "affect where a peak is predicted to land on screen; this tool\n"
+        "always uses the same values for the render and for the labelling,\n"
+        "so there's nothing extra to keep in sync here.\n"
+        "\n"
+        "--list-visible-peaks OUT.txt writes the visible peaks (independent\n"
+        "of --image; works even without one) to a tab-separated text file:\n"
+        "name, lat, lon, ele_m, range_m, one per line, in no particular\n"
+        "order. Peaks with no OSM name fall back to their altitude as a\n"
+        "name (e.g. \"1583.0\") -- filter those out downstream by checking\n"
+        "for at least one letter, if wanted.\n"
+        "\n"
+        "With a .pdf/.svg --image, visible peaks are labelled on the\n"
+        "render: a black name in vertical text (read by tilting your head\n"
+        "to the left: first letter at the bottom, last letter at the top),\n"
+        "connected to its peak by a thin almond-green leader line. Each\n"
+        "label's last (top) character sits 30px below the top of the\n"
+        "canvas, regardless of how far its peak actually is -- so the\n"
+        "leader line length alone shows how far up the label had to reach\n"
+        "in the sky. Before drawing, peaks whose screen-x positions are\n"
+        "closer than --label-font-size-pt*1.5 are considered to conflict;\n"
+        "within each conflicting group, only the highest-elevation peak\n"
+        "gets a label, the others are dropped entirely (no line, no name).\n"
+        "--label-font-size-pt sets the text height in real typographic\n"
+        "points, i.e. as it will appear in the output PDF/SVG page (default\n"
+        "12); raise it for a legible render at a large --width, or when the\n"
+        "page will be viewed/printed at less than 100% zoom -- this also\n"
+        "widens the conflict-detection gap, so fewer, larger labels survive.\n"
         "\n"
         "=== Viewer position ===\n"
         "\n"
@@ -343,6 +370,8 @@ int main(int argc, char* argv[])
         { "no-ridge-lines",     no_argument,       NULL, 'R' },
         { "ridge-line-threshold", required_argument, NULL, 'r' },
         { "ridge-line-gray",    required_argument, NULL, 'g' },
+        { "label-font-size-pt", required_argument, NULL, 'F' },
+        { "list-visible-peaks", required_argument, NULL, 'L' },
         { "znear",             required_argument, NULL, '1' },
         { "zfar",              required_argument, NULL, '2' },
         { "znear-color",       required_argument, NULL, '3' },
@@ -355,6 +384,7 @@ int main(int argc, char* argv[])
     int         height              = 0;
     int         cut_off_bottom_px   = 0;
     const char* filename_image      = NULL;
+    const char* filename_visible_peaks = NULL;
     const char* dir_dems            = NULL;
     const char* dir_tiles           = NULL;
     const char* tiles_name          = NULL;
@@ -369,6 +399,7 @@ int main(int argc, char* argv[])
     bool        ridge_lines          = true;
     float       ridge_line_threshold_m = 500.0f;
     float       ridge_line_gray      = 0.15f;
+    float       label_font_size_pt   = 12.0f;
 
     float znear       = HORIZONATOR_ZNEAR_DEFAULT;
     float zfar        = HORIZONATOR_ZFAR_DEFAULT;
@@ -514,6 +545,14 @@ int main(int argc, char* argv[])
             ridge_line_gray = (float)atof(optarg);
             break;
 
+        case 'F':
+            label_font_size_pt = (float)atof(optarg);
+            break;
+
+        case 'L':
+            filename_visible_peaks = optarg;
+            break;
+
         case '?':
             fprintf(stderr, "Unknown option\n\n");
             fprintf(stderr, usage, argv[0]);
@@ -532,15 +571,15 @@ int main(int argc, char* argv[])
     if(znear_color < 0.f) znear_color = znear;
     if(zfar_color  < 0.f) zfar_color  = zfar;
 
-    if(width >  0 && filename_image == NULL)
+    if(width >  0 && filename_image == NULL && filename_visible_peaks == NULL)
     {
-        fprintf(stderr, "--width makes sense only with --image\n\n");
+        fprintf(stderr, "--width makes sense only with --image or --list-visible-peaks\n\n");
         fprintf(stderr, usage, argv[0]);
         return 1;
     }
-    if(width <= 0 &&  filename_image != NULL)
+    if(width <= 0 && (filename_image != NULL || filename_visible_peaks != NULL))
     {
-        fprintf(stderr, "--width required if --image\n\n");
+        fprintf(stderr, "--width required if --image or --list-visible-peaks\n\n");
         fprintf(stderr, usage, argv[0]);
         return 1;
     }
@@ -569,7 +608,7 @@ int main(int argc, char* argv[])
 
     }
 
-    if(filename_image == NULL)
+    if(filename_image == NULL && filename_visible_peaks == NULL)
     {
         glut_loop(render_texture, SRTM1,
                   lat, lon,
@@ -585,9 +624,13 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    const int strlen_filename_image = strlen(filename_image);
+    // filename_image can legitimately be NULL here now (--list-visible-peaks
+    // without --image); strlen(NULL) is undefined behavior, so this has to
+    // stay inside the NULL check, unlike before
+    int strlen_filename_image = 0;
     if(filename_image != NULL)
     {
+        strlen_filename_image = strlen(filename_image);
         if(!(strlen_filename_image >= 5 &&
              (0 == strcasecmp(".png", &filename_image[strlen_filename_image-4]) ||
               0 == strcasecmp(".pdf", &filename_image[strlen_filename_image-4]) ||
@@ -615,7 +658,7 @@ int main(int argc, char* argv[])
     uint8_t* pool = NULL;
     char*    image;
     float* ranges;
-    if(filename_image != NULL)
+    if(filename_image != NULL || filename_visible_peaks != NULL)
     {
         // rgb for the image and float for the depth
         pool = malloc( width*height * (3 + sizeof(float)) );
@@ -688,6 +731,44 @@ int main(int argc, char* argv[])
         draw_ridge_outlines((uint8_t*)image, ranges, width, height,
                             ridge_line_threshold_m, ridge_line_gray);
 
+    // Shared by --image (.pdf/.svg) and --list-visible-peaks
+    poi_t pois[] = {
+// ./query-peaks-from-osm.py 34. -118 100000 > socal-peaks.h
+#include "socal-peaks.h"
+    };
+    const int N_pois = (int)(sizeof(pois) / sizeof(pois[0]));
+
+    if(filename_visible_peaks != NULL)
+    {
+        visible_poi_t visible[N_pois];
+        int Nvisible = find_visible_pois(visible,
+                                         ranges, width, height, cut_off_bottom_px,
+                                         pois, N_pois,
+                                         lat, lon,
+                                         az_center_deg-az_radius_deg,
+                                         az_center_deg+az_radius_deg,
+                                         viewer_z,
+                                         curvature_enabled, refraction_k,
+                                         zfar);
+
+        FILE* fp = fopen(filename_visible_peaks, "w");
+        if(fp == NULL)
+        {
+            fprintf(stderr, "Couldn't open '%s' for writing\n", filename_visible_peaks);
+            return 1;
+        }
+        // name<TAB>lat<TAB>lon<TAB>ele_m<TAB>range_m, one visible peak per
+        // line, unsorted. See cluster-visible-peaks.py for a companion
+        // script that reads this format
+        for(int i=0; i<Nvisible; i++)
+        {
+            const poi_t* poi = &pois[ visible[i].poi_index ];
+            fprintf(fp, "%s\t%.6f\t%.6f\t%.1f\t%.1f\n",
+                    poi->name, poi->lat, poi->lon, poi->ele_m, visible[i].range);
+        }
+        fclose(fp);
+    }
+
     if(filename_image != NULL)
     {
         if(0 == strcasecmp(".png", &filename_image[strlen_filename_image-4]))
@@ -715,12 +796,6 @@ int main(int argc, char* argv[])
         else
         {
             // pdf file is requested. I write an annotated pdf
-            poi_t pois[] = {
-// ./query-peaks-from-osm.py 34. -118 100000 > socal-peaks.h
-#include "socal-peaks.h"
-            };
-            const int N_pois = (int)(sizeof(pois) / sizeof(pois[0]));
-
             annotate(filename_image,
                      (uint8_t*)image, ranges, width, height, cut_off_bottom_px,
                      pois, N_pois,
@@ -729,11 +804,12 @@ int main(int argc, char* argv[])
                      az_center_deg+az_radius_deg,
                      viewer_z,
                      curvature_enabled, refraction_k,
-                     zfar);
+                     zfar,
+                     label_font_size_pt);
         }
-
-        free(pool);
     }
+
+    free(pool);
 
     return 0;
 }
