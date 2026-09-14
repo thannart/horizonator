@@ -151,8 +151,9 @@ ones, grouped by what they do:
   partly compensated by atmospheric refraction (=--refraction-k=, default
   0.13). Off by default (flat tangent-plane rendering); matters at 100+km.
 - *Color and ridge outlines*: by default the render is color-coded by
-  range (dark gray near, fading to light gray/white far away), with the
-  crest of each visible ridge/mountain-range layer outlined, the way
+  range (atmospheric perspective: dark neutral gray near, fading to a pale
+  blue-gray far away, closer to the white background), with the crest of
+  each visible ridge/mountain-range layer outlined, the way
   classic drawn panoramas (e.g. [[https://www.udeuschle.de/panoramas/makepanoramas_en.htm][udeuschle.de]]) do it. See
   =--no-ridge-lines=, =--ridge-line-threshold= and =--ridge-line-gray= to
   disable or tune this.

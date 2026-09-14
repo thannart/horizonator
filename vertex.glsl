@@ -45,10 +45,12 @@ out vec3 normal;
 const float Rearth = 6371000.0;
 const float pi     = 3.14159265358979;
 
-// Terrain grayscale gradient: near terrain is darker, far terrain fades
-// towards the (white) background, udeuschle.de-style
-const float GRAY_NEAR = 0.30;
-const float GRAY_FAR  = 0.92;
+// Atmospheric perspective: near terrain is a dark neutral gray; far
+// terrain fades towards a pale blue-gray (not pure white/gray), the way
+// haze/scattered light tints distant relief in a real photo, and towards
+// the (white) background at the very back, udeuschle.de-style
+const vec3 COLOR_NEAR = vec3(0.30, 0.30, 0.30);
+const vec3 COLOR_FAR  = vec3(0.80, 0.84, 0.92);
 
 // Unwraps an angle x to lie within pi of an angle near. All angles in radians
 float unwrap_near_rad(float x, float near)
@@ -193,6 +195,5 @@ void main(void)
 
     float t = clamp((distance_ne - znear_color) / (zfar_color - znear_color),
                     0.0, 1.0);
-    float gray = mix(GRAY_NEAR, GRAY_FAR, t);
-    rgb = vec3(gray, gray, gray);
+    rgb = mix(COLOR_NEAR, COLOR_FAR, t);
 }
