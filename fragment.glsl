@@ -23,6 +23,13 @@ in vec3 normal_fragment;
 uniform float materials_scale;
 in float elevation_fragment;
 
+// Real land-cover class (see landcover.h), from pre-baked ESA WorldCover /
+// CORINE Land Cover tiles (build-landcover-tiles.py), sampled per vertex on
+// the CPU and passed through unblended (see the flat qualifier in
+// geometry.glsl). 0 means no real data was available at this point: falls
+// back to the procedural elevation/slope classification below
+flat in float landcover_class_fragment;
+
 // 0 at znear_color, 1 at zfar_color (see vertex.glsl)
 in float atmo_t_fragment;
 
@@ -34,6 +41,15 @@ const vec3 COLOR_FOREST = vec3(0.35, 0.42, 0.30);
 const vec3 COLOR_GRASS  = vec3(0.55, 0.58, 0.38);
 const vec3 COLOR_ROCK   = vec3(0.50, 0.47, 0.43);
 const vec3 COLOR_SNOW   = vec3(0.95, 0.96, 0.98);
+const vec3 COLOR_WATER  = vec3(0.28, 0.38, 0.45);
+
+// Must match horizonator_landcover_class_t in landcover.h
+#define LANDCOVER_UNKNOWN 0.0
+#define LANDCOVER_FOREST  1.0
+#define LANDCOVER_GRASS   2.0
+#define LANDCOVER_ROCK    3.0
+#define LANDCOVER_SNOWICE 4.0
+#define LANDCOVER_WATER   5.0
 
 // Used as the near (atmo_t==0) color when materials_scale==0: this is
 // the plain-grayscale look (no material data), a dark neutral gray purely
@@ -52,7 +68,12 @@ const vec3 COLOR_NEAR_DEFAULT = vec3(0.30, 0.30, 0.30);
 // materials are on
 const vec3 COLOR_FAR = vec3(0.80, 0.84, 0.92);
 
-vec3 material_color(float elevation, float slope_nz)
+// Purely procedural fallback, used wherever no real land-cover data was
+// baked in for this point (landcover_class_fragment == LANDCOVER_UNKNOWN):
+// no aerial imagery or land-cover data involved, just elevation (snow
+// line) and slope steepness (bare rock), with forest below the tree line
+// and alpine grass above it otherwise
+vec3 material_color_procedural(float elevation, float slope_nz)
 {
     if(elevation > SNOW_LINE_M)
         return COLOR_SNOW;
@@ -61,6 +82,23 @@ vec3 material_color(float elevation, float slope_nz)
     if(elevation > TREE_LINE_M)
         return COLOR_GRASS;
     return COLOR_FOREST;
+}
+
+// landcover_class is a float holding one of the LANDCOVER_* integer codes
+// above (from a GL_UNSIGNED_BYTE vertex attribute, so it arrives here as an
+// exact integral value, not needing to be rounded). LANDCOVER_UNKNOWN falls
+// back to the procedural elevation/slope classification: real data is
+// preferred wherever build-landcover-tiles.py has prepared it, but a point
+// outside that coverage should still get an approximate material, not the
+// flat legacy gray
+vec3 material_color(float landcover_class, float elevation, float slope_nz)
+{
+    if(landcover_class == LANDCOVER_FOREST)  return COLOR_FOREST;
+    if(landcover_class == LANDCOVER_GRASS)   return COLOR_GRASS;
+    if(landcover_class == LANDCOVER_ROCK)    return COLOR_ROCK;
+    if(landcover_class == LANDCOVER_SNOWICE) return COLOR_SNOW;
+    if(landcover_class == LANDCOVER_WATER)   return COLOR_WATER;
+    return material_color_procedural(elevation, slope_nz);
 }
 
 void main(void)
@@ -80,7 +118,7 @@ void main(void)
     // materials_scale==0 must reproduce the old, untinted look exactly:
     // mix(COLOR_NEAR_DEFAULT, material_color(...), 0.0) == COLOR_NEAR_DEFAULT
     vec3 near_color = mix(COLOR_NEAR_DEFAULT,
-                          material_color(elevation_fragment, n.z),
+                          material_color(landcover_class_fragment, elevation_fragment, n.z),
                           materials_scale);
 
     // Atmospheric haze: blend towards the far color with distance. This

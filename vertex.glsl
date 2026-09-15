@@ -9,6 +9,13 @@ layout (location = 0) in vec3 vertex;
 // triangle, so shading is continuous across triangle edges
 layout (location = 1) in vec3 normal_attr;
 
+// Per-vertex land-cover class (see landcover.h), sampled on the CPU from
+// pre-baked tiles (horizonator-lib.c). 0 means no real data here -- the
+// fragment shader falls back to the procedural elevation/slope
+// classification for those points. A small integer code, packed as a
+// GL_UNSIGNED_BYTE attribute; comes through here as a float in [0,255]
+layout (location = 2) in float landcover_class_attr;
+
 // We receive these from the CPU code
 uniform float viewer_cell_i, viewer_cell_j;
 uniform float viewer_z;
@@ -47,6 +54,9 @@ out vec2 tex;
 
 // Passed through to the geometry/fragment shaders for smooth slope shading
 out vec3 normal;
+
+// Passed through to the geometry/fragment shaders for --materials
+out float landcover_class;
 
 // Raw DEM elevation (meters above sea level, NOT relative to the viewer),
 // for the procedural material classification (snow line etc.) in
@@ -172,6 +182,7 @@ void main(void)
         vec3 enh = vec3( en.x, en.y, vertex.z - viewer_z - drop );
         normal = normal_attr;
         elevation_m = vertex.z;
+        landcover_class = landcover_class_attr;
 
         float az_rad = atan(en.x, en.y);
 

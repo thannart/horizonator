@@ -81,6 +81,7 @@ static bool glut_loop( bool render_texture, bool SRTM1,
                        float znear_color, float zfar_color,
 
                        const char* dir_dems,
+                       const char* dir_landcover,
                        const char* dir_tiles,
                        const char* tiles_name,
                        const char* tiles_url_fmt,
@@ -98,6 +99,7 @@ static bool glut_loop( bool render_texture, bool SRTM1,
                            true,
                            render_texture, SRTM1,
                            dir_dems,
+                           dir_landcover,
                            dir_tiles,
                            tiles_name,
                            tiles_url_fmt,
@@ -200,7 +202,8 @@ int main(int argc, char* argv[])
         "   [--label-font-size-pt POINTS]\n"
         "   [--list-visible-peaks OUT.txt]\n"
         "   [--znear ZNEAR] [--zfar ZFAR] [--znear-color ZNEARCOLOR] [--zfar-color ZFARCOLOR]\n"
-        "   [--dirdems DIRECTORY] [--dirtiles DIRECTORY] [--tiles NAME=FMT]\n"
+        "   [--dirdems DIRECTORY] [--dirlandcover DIRECTORY]\n"
+        "   [--dirtiles DIRECTORY] [--tiles NAME=FMT]\n"
         "   LAT LON AZ_CENTER_DEG AZ_RADIUS_DEG\n"
         "\n"
         "=== Basic operation ===\n"
@@ -275,13 +278,19 @@ int main(int argc, char* argv[])
         "=== Materials ===\n"
         "\n"
         "By default terrain isn't tinted by land cover, only by distance and\n"
-        "(if --shading) slope lighting. Pass --materials for a first, purely\n"
-        "procedural approximation: each point is classified by elevation\n"
-        "(snow above a fixed snow line) and slope steepness (bare rock on\n"
-        "steep terrain), with forest below the tree line and alpine grass\n"
-        "above it otherwise. This uses no aerial imagery or real land-cover\n"
-        "data, just the same DEM already being rendered -- a quick\n"
-        "placeholder, not a substitute for real land-cover texturing.\n"
+        "(if --shading) slope lighting. Pass --materials to tint it by real\n"
+        "land cover instead: forest/grass/bare rock/snow-or-ice/water, from\n"
+        "ESA WorldCover tiles (overlaid with Copernicus CORINE Land Cover\n"
+        "just for its dedicated glacier class -- WorldCover alone doesn't\n"
+        "reliably tell a glacier apart from bare rock). These tiles are\n"
+        "prepared offline by build-landcover-tiles.py, not downloaded by\n"
+        "this program. Wherever no such data has been prepared for a given\n"
+        "point (e.g. build-landcover-tiles.py hasn't been run for that\n"
+        "area), --materials falls back to a purely procedural\n"
+        "approximation there instead: elevation (snow above a fixed snow\n"
+        "line) and slope steepness (bare rock on steep terrain), forest\n"
+        "below the tree line and alpine grass above it otherwise -- using\n"
+        "no real data, just the DEM already being rendered.\n"
         "\n"
         "=== Color and ridge outlines ===\n"
         "\n"
@@ -377,6 +386,13 @@ int main(int argc, char* argv[])
         "The DEMs are in the directory given by --dirdems, or in\n"
         "~/.horizonator/DEMs_SRTM3/ (or DEMs_SRTM1) if omitted.\n"
         "\n"
+        "The land-cover tiles used by --materials (see MATERIALS above) are\n"
+        "in the directory given by --dirlandcover, or in\n"
+        "~/.horizonator/landcover/ if omitted; see build-landcover-tiles.py\n"
+        "to prepare them. A missing directory, or missing individual tiles,\n"
+        "is not an error: --materials just falls back to its procedural\n"
+        "approximation wherever real data isn't available.\n"
+        "\n"
         "The tiles are in the directory given by --dirtiles, or in\n"
         "~/.horizonator/tiles if omitted. This is the BASE directory for ALL\n"
         "the available tile sets. By default we use the OSM mapnik tiles. To\n"
@@ -391,6 +407,7 @@ int main(int argc, char* argv[])
         { "cut-off-bottom-px", required_argument, NULL, 'c' },
         { "image",             required_argument, NULL, 'i' },
         { "dirdems",           required_argument, NULL, 'd' },
+        { "dirlandcover",      required_argument, NULL, 'l' },
         { "dirtiles",          required_argument, NULL, 't' },
         { "tiles",             required_argument, NULL, 'I' },
         { "texture",           no_argument,       NULL, 'T' },
@@ -423,6 +440,7 @@ int main(int argc, char* argv[])
     const char* filename_image      = NULL;
     const char* filename_visible_peaks = NULL;
     const char* dir_dems            = NULL;
+    const char* dir_landcover       = NULL;
     const char* dir_tiles           = NULL;
     const char* tiles_name          = NULL;
     const char* tiles_url_fmt       = NULL;
@@ -527,6 +545,10 @@ int main(int argc, char* argv[])
 
         case 'd':
             dir_dems = optarg;
+            break;
+
+        case 'l':
+            dir_landcover = optarg;
             break;
 
         case 't':
@@ -677,7 +699,7 @@ int main(int argc, char* argv[])
                   az_center_deg-az_radius_deg,
                   az_center_deg+az_radius_deg,
                   znear,zfar,znear_color,zfar_color,
-                  dir_dems, dir_tiles,
+                  dir_dems, dir_landcover, dir_tiles,
                   tiles_name, tiles_url_fmt,
                   allow_downloads);
         return 0;
@@ -744,7 +766,7 @@ int main(int argc, char* argv[])
                            az_center_deg+az_radius_deg,
                            true,
                            render_texture, SRTM1,
-                           dir_dems, dir_tiles,
+                           dir_dems, dir_landcover, dir_tiles,
                            tiles_name, tiles_url_fmt,
                            allow_downloads) )
     {

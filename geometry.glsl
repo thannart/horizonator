@@ -26,6 +26,16 @@ out vec3 normal_fragment;
 in  float elevation_m[];
 out float elevation_fragment;
 
+// Real land-cover class (see landcover.h), for the --materials real-data
+// path in fragment.glsl. 0 means no data: fragment.glsl falls back to the
+// procedural elevation/slope classification for that vertex. This is a
+// small integer code, not something meaningful to blend, so it's flat
+// (no interpolation across the triangle -- every fragment gets the
+// provoking vertex's class outright, unlike the smoothly-interpolated
+// normal/elevation above)
+in       float landcover_class[];
+flat out float landcover_class_fragment;
+
 void main()
 {
     // The azimuth is gl_Position.x. Any triangles on the seam (some vertices
@@ -48,6 +58,7 @@ void main()
         tex_fragment       = tex[i];
         normal_fragment    = normal[i];
         elevation_fragment = elevation_m[i];
+        landcover_class_fragment = landcover_class[i];
         gl_Position        = gl_in[i].gl_Position;
         EmitVertex();
     }

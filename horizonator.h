@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "dem.h"
+#include "landcover.h"
 
 // these define the default front and back clipping planes, in meters
 #define HORIZONATOR_ZNEAR_DEFAULT 100.0f
@@ -42,6 +43,7 @@ typedef struct
     float viewer_lat, viewer_lon;
 
     horizonator_dem_context_t dems;
+    horizonator_landcover_context_t landcover;
 
     struct
     {
@@ -117,6 +119,12 @@ bool horizonator_init( // output
                        bool render_texture,
                        bool SRTM1,
                        const char* dir_dems,
+                       // Pre-baked land-cover tiles (see landcover.h and
+                       // build-landcover-tiles.py). NULL selects the default
+                       // (~/.horizonator/landcover). Missing tiles are
+                       // tolerated: those points just fall back to the
+                       // procedural elevation/slope material classification
+                       const char* dir_landcover,
                        const char* dir_tiles,
                        const char* tiles_name,
                        const char* tiles_url_fmt,

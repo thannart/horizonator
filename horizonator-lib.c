@@ -18,6 +18,7 @@
 #include "horizonator.h"
 #include "bench.h"
 #include "dem.h"
+#include "landcover.h"
 #include "util.h"
 
 
@@ -92,6 +93,7 @@ bool horizonator_init( // output
                        bool render_texture,
                        bool SRTM1,
                        const char* dir_dems,
+                       const char* dir_landcover,
                        const char* dir_tiles,
                        const char* tiles_name,
                        const char* tiles_url_fmt,
@@ -99,8 +101,9 @@ bool horizonator_init( // output
 {
     *ctx = (horizonator_context_t){};
 
-    bool result             = false;
-    bool dem_context_inited = false;
+    bool result                   = false;
+    bool dem_context_inited       = false;
+    bool landcover_context_inited = false;
 
 
     if(tiles_name == NULL)
@@ -111,6 +114,8 @@ bool horizonator_init( // output
         dir_dems  = SRTM1 ?
             "~/.horizonator/DEMs_SRTM1" :
             "~/.horizonator/DEMs_SRTM3";
+    if(dir_landcover == NULL)
+        dir_landcover = "~/.horizonator/landcover";
 
     char _dir_tiles[256];
     if(dir_tiles == NULL)
@@ -211,6 +216,15 @@ bool horizonator_init( // output
         goto done;
     }
     dem_context_inited = true;
+
+    // Reuses ctx->dems' grid geometry outright (see landcover.h) -- must
+    // come after horizonator_dem_init() above, never before
+    if( !horizonator_landcover_init( &ctx->landcover, &ctx->dems, dir_landcover) )
+    {
+        MSG("Couldn't init landcover tiles. Giving up");
+        goto done;
+    }
+    landcover_context_inited = true;
 
     render_radius_cells = ctx->dems.radius_cells;
 
@@ -467,6 +481,17 @@ bool horizonator_init( // output
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, NULL);
         GLfloat* normals = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
 
+        // Per-vertex land-cover class (see landcover.h), for the
+        // --materials real-data path. One byte/vertex: this is a small
+        // integer code, not something that benefits from float precision
+        GLuint landcoverBufID;
+        glGenBuffers(1, &landcoverBufID);
+        glBindBuffer(GL_ARRAY_BUFFER, landcoverBufID);
+        glEnableVertexAttribArray(2);
+        glBufferData(GL_ARRAY_BUFFER, Nvertices*sizeof(GLubyte), NULL, GL_STATIC_DRAW);
+        glVertexAttribPointer(2, 1, GL_UNSIGNED_BYTE, GL_FALSE, 0, NULL);
+        GLubyte* landcover_classes = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
+
         // meters/cell, East-West and North-South. Same formula as the
         // (disabled) CPU-side paths below, factored out since the normal
         // computation needs it on every vertex
@@ -475,8 +500,9 @@ bool horizonator_init( // output
         const float cellsize_ns     = Rearth * (float)(M_PI/180.0) / (float)ctx->dems.cells_per_deg;
         const float cellsize_ew     = cellsize_ns * cos_viewer_lat_here;
 
-        int vertex_buf_idx = 0;
-        int normal_buf_idx = 0;
+        int vertex_buf_idx    = 0;
+        int normal_buf_idx    = 0;
+        int landcover_buf_idx = 0;
 
         for( int j=0; j<2*render_radius_cells; j++ )
         {
@@ -556,10 +582,19 @@ bool horizonator_init( // output
                 normals[normal_buf_idx++] = nx*ninv;
                 normals[normal_buf_idx++] = ny*ninv;
                 normals[normal_buf_idx++] = nz*ninv;
+
+                landcover_classes[landcover_buf_idx++] =
+                    horizonator_landcover_sample(&ctx->landcover, i, j);
             }
         }
 
+        glBindBuffer(GL_ARRAY_BUFFER, landcoverBufID);
         int res = glUnmapBuffer(GL_ARRAY_BUFFER);
+        assert( res == GL_TRUE );
+        assert( landcover_buf_idx == Nvertices );
+
+        glBindBuffer(GL_ARRAY_BUFFER, normalBufID);
+        res = glUnmapBuffer(GL_ARRAY_BUFFER);
         assert( res == GL_TRUE );
         assert( normal_buf_idx == Nvertices*3 );
 
@@ -849,8 +884,13 @@ bool horizonator_init( // output
     result = true;
 
  done:
-    if(dem_context_inited && !result)
-        horizonator_dem_deinit(&ctx->dems);
+    if(!result)
+    {
+        if(landcover_context_inited)
+            horizonator_landcover_deinit(&ctx->landcover);
+        if(dem_context_inited)
+            horizonator_dem_deinit(&ctx->dems);
+    }
 
     return result;
 }
@@ -870,6 +910,7 @@ void horizonator_deinit( horizonator_context_t* ctx )
     // several tiles one at a time): without this, memory use grows
     // unboundedly across iterations
     horizonator_dem_deinit(&ctx->dems);
+    horizonator_landcover_deinit(&ctx->landcover);
 }
 
 bool horizonator_move(horizonator_context_t* ctx,

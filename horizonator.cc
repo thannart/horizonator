@@ -238,6 +238,7 @@ public:
                                   false,
                                   render_texture, SRTM1,
                                   NULL,NULL,
+                                  NULL,
                                   NULL,NULL,
                                   true))
             {
