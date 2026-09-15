@@ -65,6 +65,7 @@ static bool glut_loop( bool render_texture, bool SRTM1,
                        float viewer_height_m,
                        bool curvature_enabled, float refraction_k,
                        bool shading_enabled, float sun_az_deg, float sun_el_deg,
+                       bool materials_enabled,
                        bool restrict_mesh_azimuth,
 
                        // Bounds of the view. We expect az_deg1 > az_deg0. The azimuth
@@ -117,6 +118,9 @@ static bool glut_loop( bool render_texture, bool SRTM1,
         return false;
 
     if(!horizonator_set_sun(&ctx, shading_enabled, sun_az_deg, sun_el_deg))
+        return false;
+
+    if(!horizonator_set_materials(&ctx, materials_enabled))
         return false;
 
     if(!horizonator_set_zextents(&ctx,
@@ -190,6 +194,7 @@ int main(int argc, char* argv[])
         "   [--viewer-height METERS]\n"
         "   [--curvature] [--refraction-k K]\n"
         "   [--shading] [--sun-azimuth DEG] [--sun-elevation DEG]\n"
+        "   [--materials]\n"
         "   [--no-restrict-mesh-azimuth]\n"
         "   [--no-ridge-lines] [--ridge-line-threshold METERS] [--ridge-line-gray FRACTION]\n"
         "   [--label-font-size-pt POINTS]\n"
@@ -266,6 +271,17 @@ int main(int argc, char* argv[])
         "--sun-elevation (default 45deg above the horizon) set the direction\n"
         "the light comes from; both are ignored unless --shading is given.\n"
         "A slope facing away from the sun is dimmed, never made fully black.\n"
+        "\n"
+        "=== Materials ===\n"
+        "\n"
+        "By default terrain isn't tinted by land cover, only by distance and\n"
+        "(if --shading) slope lighting. Pass --materials for a first, purely\n"
+        "procedural approximation: each point is classified by elevation\n"
+        "(snow above a fixed snow line) and slope steepness (bare rock on\n"
+        "steep terrain), with forest below the tree line and alpine grass\n"
+        "above it otherwise. This uses no aerial imagery or real land-cover\n"
+        "data, just the same DEM already being rendered -- a quick\n"
+        "placeholder, not a substitute for real land-cover texturing.\n"
         "\n"
         "=== Color and ridge outlines ===\n"
         "\n"
@@ -386,6 +402,7 @@ int main(int argc, char* argv[])
         { "shading",            no_argument,       NULL, 's' },
         { "sun-azimuth",        required_argument, NULL, 'A' },
         { "sun-elevation",      required_argument, NULL, 'E' },
+        { "materials",          no_argument,       NULL, 'm' },
         { "no-restrict-mesh-azimuth", no_argument, NULL, 'M' },
         { "no-ridge-lines",     no_argument,       NULL, 'R' },
         { "ridge-line-threshold", required_argument, NULL, 'r' },
@@ -418,6 +435,7 @@ int main(int argc, char* argv[])
     bool        shading_enabled     = false;
     float       sun_az_deg          = 135.0f;
     float       sun_el_deg          = 45.0f;
+    bool        materials_enabled   = false;
     bool        restrict_mesh_azimuth = true;
     bool        ridge_lines          = true;
     float       ridge_line_threshold_m = 500.0f;
@@ -564,6 +582,10 @@ int main(int argc, char* argv[])
             sun_el_deg = (float)atof(optarg);
             break;
 
+        case 'm':
+            materials_enabled = true;
+            break;
+
         case 'M':
             restrict_mesh_azimuth = false;
             break;
@@ -650,6 +672,7 @@ int main(int argc, char* argv[])
                   viewer_height_m,
                   curvature_enabled, refraction_k,
                   shading_enabled, sun_az_deg, sun_el_deg,
+                  materials_enabled,
                   restrict_mesh_azimuth,
                   az_center_deg-az_radius_deg,
                   az_center_deg+az_radius_deg,
@@ -748,6 +771,9 @@ int main(int argc, char* argv[])
     if(!horizonator_set_sun(&ctx, shading_enabled, sun_az_deg, sun_el_deg))
         return false;
 
+    if(!horizonator_set_materials(&ctx, materials_enabled))
+        return false;
+
     if(!horizonator_set_zextents(&ctx,
                                  znear, zfar, znear_color, zfar_color))
         return false;
@@ -772,7 +798,7 @@ int main(int argc, char* argv[])
 
     // Shared by --image (.pdf/.svg) and --list-visible-peaks
     poi_t pois[] = {
-// ./query-peaks-from-osm.py 34. -118 100000 > socal-peaks.h
+// ./query-peaks-from-osm.py 45.77294 4.82993 200000 > lyon-peaks.h
 #include "socal-peaks.h"
     };
     const int N_pois = (int)(sizeof(pois) / sizeof(pois[0]));

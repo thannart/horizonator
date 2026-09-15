@@ -774,6 +774,7 @@ bool horizonator_init( // output
         ctx->uniform_refraction_k     = glGetUniformLocation(ctx->program, "refraction_k");     assert_opengl();
         ctx->uniform_shading_scale    = glGetUniformLocation(ctx->program, "shading_scale");    assert_opengl();
         ctx->uniform_sun_dir          = glGetUniformLocation(ctx->program, "sun_dir");          assert_opengl();
+        ctx->uniform_materials_scale  = glGetUniformLocation(ctx->program, "materials_scale");  assert_opengl();
 #undef make_and_set_uniform
 
         // And I set the other uniforms
@@ -785,6 +786,8 @@ bool horizonator_init( // output
         horizonator_set_curvature(ctx, false, 0.13f);
         // Slope shading is off by default: unchanged legacy behavior
         horizonator_set_sun(ctx, false, 135.0f, 45.0f);
+        // Procedural materials are off by default: unchanged legacy behavior
+        horizonator_set_materials(ctx, false);
     }
 
     if(offscreen_width > 0)
@@ -1105,6 +1108,21 @@ bool horizonator_set_sun(horizonator_context_t* ctx,
 
     glUniform1f( ctx->uniform_shading_scale, shading_enabled ? 1.0f : 0.0f); assert_opengl();
     glUniform3f( ctx->uniform_sun_dir,       east, north, height);           assert_opengl();
+
+    return true;
+}
+
+bool horizonator_set_materials(horizonator_context_t* ctx,
+                               bool materials_enabled)
+{
+    if(ctx->use_glut)
+    {
+        if(ctx->glut_window == 0)
+            return false;
+        glutSetWindow(ctx->glut_window);
+    }
+
+    glUniform1f( ctx->uniform_materials_scale, materials_enabled ? 1.0f : 0.0f); assert_opengl();
 
     return true;
 }

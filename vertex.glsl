@@ -36,21 +36,25 @@ uniform float curvature_scale;
 uniform float refraction_k;
 
 // We send these to the fragment shader
-out vec3 rgb;
+//
+// atmo_t is 0 at znear_color and 1 at zfar_color: how far towards the
+// atmospheric haze color this point should be blended, in fragment.glsl
+// (which also knows about material colors, and needs this to decide the
+// near/far blend from a common starting point -- see COLOR_NEAR_DEFAULT
+// there)
+out float atmo_t;
 out vec2 tex;
 
 // Passed through to the geometry/fragment shaders for smooth slope shading
 out vec3 normal;
 
+// Raw DEM elevation (meters above sea level, NOT relative to the viewer),
+// for the procedural material classification (snow line etc.) in
+// fragment.glsl
+out float elevation_m;
+
 const float Rearth = 6371000.0;
 const float pi     = 3.14159265358979;
-
-// Atmospheric perspective: near terrain is a dark neutral gray; far
-// terrain fades towards a pale blue-gray (not pure white/gray), the way
-// haze/scattered light tints distant relief in a real photo, and towards
-// the (white) background at the very back, udeuschle.de-style
-const vec3 COLOR_NEAR = vec3(0.30, 0.30, 0.30);
-const vec3 COLOR_FAR  = vec3(0.80, 0.84, 0.92);
 
 // Unwraps an angle x to lie within pi of an angle near. All angles in radians
 float unwrap_near_rad(float x, float near)
@@ -167,6 +171,7 @@ void main(void)
 
         vec3 enh = vec3( en.x, en.y, vertex.z - viewer_z - drop );
         normal = normal_attr;
+        elevation_m = vertex.z;
 
         float az_rad = atan(en.x, en.y);
 
@@ -193,7 +198,6 @@ void main(void)
                             1.0 );
     }
 
-    float t = clamp((distance_ne - znear_color) / (zfar_color - znear_color),
-                    0.0, 1.0);
-    rgb = mix(COLOR_NEAR, COLOR_FAR, t);
+    atmo_t = clamp((distance_ne - znear_color) / (zfar_color - znear_color),
+                   0.0, 1.0);
 }
