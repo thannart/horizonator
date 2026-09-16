@@ -118,8 +118,21 @@ bool horizonator_landcover_init(// output
 
             int res = fstat(ctx->mmap_fd[i][j], &sb);
             assert( res == 0 );
-            if(sb.st_size == 0)
+
+            // A tile that's the wrong size (most likely: built with the
+            // other --SRTM1 setting than what we're using now) is treated
+            // the same as a missing one -- a warning, not a hard failure.
+            // materials_scale users could easily have a mix of DEM
+            // resolutions cached (SRTM1 for one area, SRTM3 elsewhere,
+            // built at different times), so this must stay recoverable:
+            // aborting the whole render over one stale tile would be a
+            // much worse outcome than just falling back to the procedural
+            // classification for that tile's area
+            if(sb.st_size == 0 || sb.st_size != expected_file_size)
             {
+                if(sb.st_size != 0)
+                    MSG("The landcover file '%s' has unexpected size (%zu; expected %d) -- ignoring it (was it built with a different --SRTM1 setting?)",
+                        filename, (size_t)sb.st_size, expected_file_size);
                 close(ctx->mmap_fd[i][j]);
 
                 ctx->tiles     [i][j] = NULL;
@@ -135,14 +148,6 @@ bool horizonator_landcover_init(// output
             {
                 horizonator_landcover_deinit(ctx);
                 MSG("Couldn't mmap the landcover file '%s'", filename );
-                return false;
-            }
-
-            if( expected_file_size != sb.st_size )
-            {
-                horizonator_landcover_deinit(ctx);
-                MSG("The landcover file '%s' has unexpected size (%zu; expected %d). Was it built with a matching --SRTM1 setting?",
-                    filename, (size_t)sb.st_size, expected_file_size);
                 return false;
             }
         }
