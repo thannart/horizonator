@@ -24,10 +24,10 @@ uniform float materials_scale;
 in float elevation_fragment;
 
 // Real land-cover class (see landcover.h), from pre-baked ESA WorldCover /
-// CORINE Land Cover tiles (build-landcover-tiles.py), sampled per vertex on
-// the CPU and passed through unblended (see the flat qualifier in
-// geometry.glsl). 0 means no real data was available at this point: falls
-// back to the procedural elevation/slope classification below
+// IGN OCS GE / CORINE Land Cover tiles (build-landcover-tiles.py), sampled
+// per vertex on the CPU and passed through unblended (see the flat
+// qualifier in geometry.glsl). 0 means no real data was available at this
+// point: falls back to the procedural elevation/slope classification below
 flat in float landcover_class_fragment;
 
 // 0 at znear_color, 1 at zfar_color (see vertex.glsl)
@@ -43,13 +43,23 @@ const vec3 COLOR_ROCK   = vec3(0.50, 0.47, 0.43);
 const vec3 COLOR_SNOW   = vec3(0.95, 0.96, 0.98);
 const vec3 COLOR_WATER  = vec3(0.28, 0.38, 0.45);
 
+// Finer nuances only IGN OCS GE (not WorldCover) can tell apart: cooler,
+// darker green for conifers; warmer, lighter green for deciduous; alpine
+// heath/scrub (also WorldCover's Shrubland) between grass and rock
+const vec3 COLOR_FOREST_CONIFER   = vec3(0.28, 0.37, 0.27);
+const vec3 COLOR_FOREST_DECIDUOUS = vec3(0.42, 0.48, 0.28);
+const vec3 COLOR_SHRUB            = vec3(0.50, 0.52, 0.32);
+
 // Must match horizonator_landcover_class_t in landcover.h
-#define LANDCOVER_UNKNOWN 0.0
-#define LANDCOVER_FOREST  1.0
-#define LANDCOVER_GRASS   2.0
-#define LANDCOVER_ROCK    3.0
-#define LANDCOVER_SNOWICE 4.0
-#define LANDCOVER_WATER   5.0
+#define LANDCOVER_UNKNOWN            0.0
+#define LANDCOVER_FOREST             1.0
+#define LANDCOVER_GRASS              2.0
+#define LANDCOVER_ROCK               3.0
+#define LANDCOVER_SNOWICE            4.0
+#define LANDCOVER_WATER              5.0
+#define LANDCOVER_FOREST_DECIDUOUS   6.0
+#define LANDCOVER_FOREST_CONIFER     7.0
+#define LANDCOVER_SHRUB              8.0
 
 // Used as the near (atmo_t==0) color when materials_scale==0: this is
 // the plain-grayscale look (no material data), a dark neutral gray purely
@@ -93,11 +103,14 @@ vec3 material_color_procedural(float elevation, float slope_nz)
 // flat legacy gray
 vec3 material_color(float landcover_class, float elevation, float slope_nz)
 {
-    if(landcover_class == LANDCOVER_FOREST)  return COLOR_FOREST;
-    if(landcover_class == LANDCOVER_GRASS)   return COLOR_GRASS;
-    if(landcover_class == LANDCOVER_ROCK)    return COLOR_ROCK;
-    if(landcover_class == LANDCOVER_SNOWICE) return COLOR_SNOW;
-    if(landcover_class == LANDCOVER_WATER)   return COLOR_WATER;
+    if(landcover_class == LANDCOVER_FOREST)           return COLOR_FOREST;
+    if(landcover_class == LANDCOVER_GRASS)            return COLOR_GRASS;
+    if(landcover_class == LANDCOVER_ROCK)             return COLOR_ROCK;
+    if(landcover_class == LANDCOVER_SNOWICE)          return COLOR_SNOW;
+    if(landcover_class == LANDCOVER_WATER)            return COLOR_WATER;
+    if(landcover_class == LANDCOVER_FOREST_DECIDUOUS) return COLOR_FOREST_DECIDUOUS;
+    if(landcover_class == LANDCOVER_FOREST_CONIFER)   return COLOR_FOREST_CONIFER;
+    if(landcover_class == LANDCOVER_SHRUB)            return COLOR_SHRUB;
     return material_color_procedural(elevation, slope_nz);
 }
 
