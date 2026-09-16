@@ -40,6 +40,20 @@ typedef struct
 
     uint32_t program;
 
+    // GL object handles created by horizonator_init(), needed so
+    // horizonator_deinit() can explicitly glDelete* them. Previously these
+    // were local variables inside horizonator_init(), discarded as soon as
+    // it returned: horizonator_deinit() had no way to free them at all, and
+    // relied entirely on glutDestroyWindow() tearing down the whole GL
+    // context (which SHOULD free everything created in it, but evidently
+    // doesn't fully on this project's llvmpipe/software-rendering setup --
+    // this is the leak that made repeated horizonator_init()/_deinit() in
+    // one process OOM the machine). 0 means "not created" (e.g. texture_id
+    // when render_texture is false)
+    uint32_t vertex_array_id;
+    uint32_t vertex_buf_id, normal_buf_id, landcover_buf_id, index_buf_id;
+    uint32_t texture_id;
+
     float viewer_lat, viewer_lon;
 
     horizonator_dem_context_t dems;
@@ -131,6 +145,22 @@ bool horizonator_init( // output
                        bool allow_downloads);
 
 void horizonator_deinit( horizonator_context_t* ctx );
+
+// Rebuilds the terrain mesh (VAO/VBOs/EBO) on an already-inited context,
+// restricted to the given azimuth wedge (same meaning as
+// restrict_mesh_azimuth/mesh_az_deg0/mesh_az_deg1 in horizonator_init()).
+// horizonator_init() calls this itself for the initial mesh; call it again
+// later to change the meshed wedge WITHOUT recreating the GL context --
+// e.g. to render a wide panorama as a sequence of narrow, memory-bounded
+// tiles (horizonator_rebuild_mesh() + horizonator_pan_zoom() +
+// horizonator_render_offscreen(), repeated per tile). Deliberately NOT
+// done via horizonator_init()/horizonator_deinit() per tile: repeated
+// context creation leaks memory inside the (llvmpipe/software) GL driver
+// itself, confirmed empirically and outside this project's code to fix;
+// reusing one context avoids it entirely
+bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
+                              bool restrict_mesh_azimuth,
+                              float mesh_az_deg0, float mesh_az_deg1);
 
 bool horizonator_resized(const horizonator_context_t* ctx, int width, int height);
 

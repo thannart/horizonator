@@ -190,7 +190,9 @@ uint8_t horizonator_landcover_sample(const horizonator_landcover_context_t* ctx,
             cell_ij[i] = ctx->cells_per_deg;
         }
 
-        if( dem_ij[i] >= ctx->Ndems_ij[i] ) return LANDCOVER_UNKNOWN;
+        // dem_ij[i] can go negative right here: see the identical check in
+        // horizonator_dem_sample() (dem.c) for why
+        if( dem_ij[i] < 0 || dem_ij[i] >= ctx->Ndems_ij[i] ) return LANDCOVER_UNKNOWN;
     }
 
     const unsigned char* tile = ctx->tiles[dem_ij[0]][dem_ij[1]];
