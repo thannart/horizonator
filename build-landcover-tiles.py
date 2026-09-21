@@ -98,12 +98,15 @@ def parse_args():
                         --lat/--lon calls that happen to share a tile''')
     parser.add_argument('--ocsge',
                         type = str,
-                        default = None,
+                        action = 'append',
+                        default = [],
                         help = '''Path to a local IGN OCS GE vector extract
                         (GeoPackage or shapefile, CODE_CS attribute; see
                         DESCRIPTION above for where to get one). Overrides
                         WorldCover wherever it has data (France only). If
-                        omitted, WorldCover alone classifies France too''')
+                        omitted, WorldCover alone classifies France too.
+                        Repeat the option to layer several extracts (one per
+                        department): a tile can straddle department borders''')
     parser.add_argument('--corine',
                         type = str,
                         default = None,
@@ -208,6 +211,11 @@ OCSGE_CODE_CS_TO_LANDCOVER = {
     'CS2.2.2':   LANDCOVER_GRASS,             # Autres formations non ligneuses (lichen, mousse...)
 }
 
+# Grid step for the intermediate raster in rasterize_ocsge_to_tile_grid(): well
+# under our ~65-90m output cells, so nearest-neighbor sampling of it is
+# effectively exact
+OCSGE_INTERMEDIATE_RES_M = 25
+
 CORINE_GLACIER_CODE = 335 # "Glaciers et neiges eternelles"
 
 WORLDCOVER_URL_FMT = \
@@ -294,27 +302,49 @@ def rasterize_ocsge_to_tile_grid(ocsge_path, lat0_int, lon0_int):
 
         shapes = []
         for feature in src.filter(bbox = src_bbox):
-            landcover_code = OCSGE_CODE_CS_TO_LANDCOVER.get(
-                feature['properties'].get('CODE_CS'))
+            # The attribute is 'CODE_CS' in the older shapefile deliveries
+            # but 'code_cs' in the OCS GE 2.0 GeoPackages: match either
+            props = {k.upper(): v for k, v in feature['properties'].items()}
+            landcover_code = OCSGE_CODE_CS_TO_LANDCOVER.get(props.get('CODE_CS'))
             if landcover_code is None:
                 # Not in our table (e.g. an unmapped/unexpected CODE_CS
                 # value): leave this polygon's area as LANDCOVER_UNKNOWN
                 # there, same as if OCS GE simply had no data for it
                 continue
-            geom_4326 = rasterio.warp.transform_geom(
-                src.crs, 'EPSG:4326', feature['geometry'])
-            shapes.append((geom_4326, landcover_code))
+            # Geometries stay in the source CRS: reprojecting them one by
+            # one costs ~8ms each, and a single 1-degree tile has ~300k
+            shapes.append((feature['geometry'], landcover_code))
+        src_crs = src.crs
 
     if not shapes:
         return None
 
-    return rasterio.features.rasterize(
-        shapes, out_shape = (TILE_WIDTH, TILE_WIDTH),
-        transform = dst_transform, fill = LANDCOVER_UNKNOWN,
-        dtype = 'uint8')
+    # Rasterize in the source (projected, meters) CRS on a fine intermediate
+    # grid...
+    xmin, ymin, xmax, ymax = src_bbox
+    ncols = int(math.ceil((xmax - xmin) / OCSGE_INTERMEDIATE_RES_M))
+    nrows = int(math.ceil((ymax - ymin) / OCSGE_INTERMEDIATE_RES_M))
+    intermediate = rasterio.features.rasterize(
+        shapes, out_shape = (nrows, ncols),
+        transform = rasterio.transform.from_origin(
+            xmin, ymax, OCSGE_INTERMEDIATE_RES_M, OCSGE_INTERMEDIATE_RES_M),
+        fill = LANDCOVER_UNKNOWN, dtype = 'uint8')
+
+    # ...then nearest-neighbor sample it at the centers of our output cells,
+    # reprojected in one batch
+    cols, rows = np.meshgrid(np.arange(TILE_WIDTH), np.arange(TILE_WIDTH))
+    lons, lats = rasterio.transform.xy(dst_transform, rows.ravel(), cols.ravel(),
+                                       offset = 'center')
+    xs, ys = rasterio.warp.transform('EPSG:4326', src_crs, lons, lats)
+    ix = np.floor((np.asarray(xs) - xmin) / OCSGE_INTERMEDIATE_RES_M).astype(int)
+    iy = np.floor((ymax - np.asarray(ys)) / OCSGE_INTERMEDIATE_RES_M).astype(int)
+    ok = (ix >= 0) & (ix < ncols) & (iy >= 0) & (iy < nrows)
+    out = np.full(TILE_WIDTH * TILE_WIDTH, LANDCOVER_UNKNOWN, dtype = np.uint8)
+    out[ok] = intermediate[iy[ok], ix[ok]]
+    return out.reshape(TILE_WIDTH, TILE_WIDTH)
 
 
-def build_tile(lat0_int, lon0_int, ocsge_path, corine_path):
+def build_tile(lat0_int, lon0_int, ocsge_paths, corine_path):
     wc_path = fetch_worldcover_tile(lat0_int + 0.5, lon0_int + 0.5)
 
     # 1. ESA WorldCover: the base layer, worldwide
@@ -325,7 +355,7 @@ def build_tile(lat0_int, lon0_int, ocsge_path, corine_path):
             out[wc_raw == wc_code] = landcover_code
 
     # 2. IGN OCS GE: overrides WorldCover wherever it has data (France only)
-    if ocsge_path is not None:
+    for ocsge_path in ocsge_paths:
         ocsge_raw = rasterize_ocsge_to_tile_grid(ocsge_path, lat0_int, lon0_int)
         if ocsge_raw is not None:
             covered = ocsge_raw != LANDCOVER_UNKNOWN
