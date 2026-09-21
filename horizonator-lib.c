@@ -77,7 +77,9 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
                               float mesh_az_deg0, float mesh_az_deg1)
 {
     bool result = false;
-    uint8_t* cell_in_view = NULL;
+    uint8_t*  cell_in_view = NULL;
+    uint64_t* needed       = NULL;
+    uint32_t* word_start   = NULL;
 
     // A previous mesh exists (either from an earlier call to this
     // function, or from horizonator_init()'s own first build) if
@@ -97,9 +99,124 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
     const float viewer_lat          = ctx->viewer_lat;
     const float viewer_lon          = ctx->viewer_lon;
 
-    // Dense triangulation. This may be adjusted below
-    int Nvertices   = (2*render_radius_cells) * (2*render_radius_cells);
-    ctx->Ntriangles = (2*render_radius_cells - 1)*(2*render_radius_cells - 1) * 2;
+    // Optional azimuth restriction: precompute, for each DEM cell, whether
+    // it lies within [mesh_az_deg0,mesh_az_deg1] (plus a margin), or close
+    // enough to the viewer to always be included. NULL means "no
+    // restriction: mesh the whole loaded circle", to keep the existing
+    // behavior for callers that don't ask for this (e.g. the interactive
+    // tool, which lets the user pan beyond the initial view)
+    if(restrict_mesh_azimuth)
+    {
+        cell_in_view = malloc((size_t)(2*render_radius_cells) * (size_t)(2*render_radius_cells));
+        if(cell_in_view == NULL)
+        {
+            MSG("malloc(cell_in_view) failed");
+            goto done;
+        }
+
+        // Same formula as horizonator_move() uses to place the viewer
+        // within the loaded cell grid
+        const float viewer_cell_i =
+            (viewer_lon - ctx->dems.origin_dem_lon_lat[0]) * ctx->dems.cells_per_deg -
+            ctx->dems.origin_dem_cellij[0];
+        const float viewer_cell_j =
+            (viewer_lat - ctx->dems.origin_dem_lon_lat[1]) * ctx->dems.cells_per_deg -
+            ctx->dems.origin_dem_cellij[1];
+        const float cos_viewer_lat_local = cosf(viewer_lat * (float)M_PI/180.0f);
+
+        const float az_center = (mesh_az_deg0 + mesh_az_deg1)/2.0f;
+        const float az_lo     = mesh_az_deg0 - MESH_AZIMUTH_MARGIN_DEG;
+        const float az_hi     = mesh_az_deg1 + MESH_AZIMUTH_MARGIN_DEG;
+
+        const int W = 2*render_radius_cells;
+        for(int j=0; j<W; j++)
+            for(int i=0; i<W; i++)
+            {
+                const float di = (float)i - viewer_cell_i;
+                const float dj = (float)j - viewer_cell_j;
+
+                bool in_view;
+                if(fabsf(di) <= MESH_INNER_RADIUS_CELLS && fabsf(dj) <= MESH_INNER_RADIUS_CELLS)
+                    in_view = true;
+                else
+                {
+                    // Same azimuth definition as vertex.glsl: 0 = North, 90 = East
+                    float az_deg = atan2f(di*cos_viewer_lat_local, dj) * 180.0f/(float)M_PI;
+
+                    // Unwrap az_deg to within 180 of az_center, to handle
+                    // the +-180 wraparound correctly regardless of where
+                    // az_center falls
+                    float d = az_deg - az_center;
+                    d -= 360.0f * roundf(d/360.0f);
+                    az_deg = az_center + d;
+
+                    in_view = (az_deg >= az_lo && az_deg <= az_hi);
+                }
+
+                cell_in_view[j*W + i] = in_view ? 1 : 0;
+            }
+    }
+
+    // Which quads get meshed, and therefore which vertices are needed at all.
+    // A quad is kept unless cell_in_view says none of its 4 corners are in
+    // view (see the index loop below, which must use the same test). Only the
+    // vertices of kept quads are emitted: with an azimuth restriction that is
+    // a thin wedge of the loaded disk, so the buffers are sized for the wedge
+    // rather than for the whole circle (which at SRTM1 resolution and a long
+    // --zfar is several GB). Vertex order stays row-major over the DEM grid,
+    // so a vertex's buffer index is the number of needed cells before it:
+    // a bitmap plus per-word prefix counts gives that in O(1) without an
+    // array of ints per cell
+    const int W = 2*render_radius_cells;
+    const size_t Ncells  = (size_t)W * (size_t)W;
+    const size_t Nwords  = (Ncells + 63) / 64;
+    needed     = calloc(Nwords, sizeof(uint64_t));
+    word_start = malloc(Nwords * sizeof(uint32_t));
+    if(needed == NULL || word_start == NULL)
+    {
+        MSG("malloc(needed vertices bitmap) failed");
+        goto done;
+    }
+
+#define QUAD_KEPT(i,j)                                                  \
+    (cell_in_view == NULL ||                                            \
+     cell_in_view[((j)+0)*W + ((i)+0)] ||                               \
+     cell_in_view[((j)+1)*W + ((i)+1)] ||                               \
+     cell_in_view[((j)+1)*W + ((i)+0)] ||                               \
+     cell_in_view[((j)+0)*W + ((i)+1)])
+
+    size_t Nquads = 0;
+    for( int j=0; j<W-1; j++ )
+        for( int i=0; i<W-1; i++ )
+            if(QUAD_KEPT(i,j))
+            {
+                Nquads++;
+                const size_t c00 = (size_t)j*W + i;
+                const size_t c10 = c00 + W;
+                needed[ c00   /64] |= (uint64_t)1 << ( c00   %64);
+                needed[(c00+1)/64] |= (uint64_t)1 << ((c00+1)%64);
+                needed[ c10   /64] |= (uint64_t)1 << ( c10   %64);
+                needed[(c10+1)/64] |= (uint64_t)1 << ((c10+1)%64);
+            }
+
+    size_t Nvertices_sz = 0;
+    for(size_t w=0; w<Nwords; w++)
+    {
+        word_start[w] = (uint32_t)Nvertices_sz;
+        Nvertices_sz += (size_t)__builtin_popcountll(needed[w]);
+    }
+    if(Nvertices_sz >= (size_t)INT32_MAX/3 || Nquads*6 >= (size_t)INT32_MAX)
+    {
+        MSG("The mesh is too big to index (%zu vertices / %zu triangles). Try a smaller --zfar",
+            Nvertices_sz, 2*Nquads);
+        goto done;
+    }
+    const int Nvertices = (int)Nvertices_sz;
+    ctx->Ntriangles     = (int)(2*Nquads);
+
+#define VERTEX_NEEDED(c) (((needed[(c)/64] >> ((c)%64)) & 1) != 0)
+#define VERTEX_INDEX(c)  ((size_t)word_start[(c)/64] + \
+    (size_t)__builtin_popcountll(needed[(c)/64] & (((uint64_t)1 << ((c)%64)) - 1)))
 
     // vertices
     //
@@ -123,15 +240,22 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
 
 #if defined VBO_USES_INTEGERS && VBO_USES_INTEGERS
         // 16-bit integers. Only one of the paths below work with these
-        glBufferData(GL_ARRAY_BUFFER, Nvertices*3*sizeof(GLshort), NULL, GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, (Nvertices+1)*3*sizeof(GLshort), NULL, GL_STATIC_DRAW);
         glVertexAttribPointer(0, 3, GL_SHORT, GL_FALSE, 0, NULL);
         GLshort* vertices = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
 #else
         // 32-bit floats. These take more space, but work with all the paths below
-        glBufferData(GL_ARRAY_BUFFER, Nvertices*3*sizeof(GLshort), NULL, GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, (Nvertices+1)*3*sizeof(GLshort), NULL, GL_STATIC_DRAW);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, NULL);
         GLshort* vertices = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
 #endif
+
+        if(vertices == NULL)
+        {
+            MSG("glMapBuffer() failed: not enough memory for a mesh of %d vertices / %d triangles (try a smaller --zfar, or coarser DEMs)",
+                Nvertices, ctx->Ntriangles);
+            goto done;
+        }
 
         // Per-vertex normal, for smooth (Gouraud-style) slope shading: the
         // rasterizer interpolates this across each triangle, so shading is
@@ -145,9 +269,16 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
         glBindBuffer(GL_ARRAY_BUFFER, normalBufID);
         ctx->normal_buf_id = normalBufID;
         glEnableVertexAttribArray(1);
-        glBufferData(GL_ARRAY_BUFFER, Nvertices*3*sizeof(GLfloat), NULL, GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, (Nvertices+1)*3*sizeof(GLfloat), NULL, GL_STATIC_DRAW);
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, NULL);
         GLfloat* normals = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
+
+        if(normals == NULL)
+        {
+            MSG("glMapBuffer() failed: not enough memory for a mesh of %d vertices / %d triangles (try a smaller --zfar, or coarser DEMs)",
+                Nvertices, ctx->Ntriangles);
+            goto done;
+        }
 
         // Per-vertex land-cover class (see landcover.h), for the
         // --materials real-data path. One byte/vertex: this is a small
@@ -157,9 +288,16 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
         glBindBuffer(GL_ARRAY_BUFFER, landcoverBufID);
         ctx->landcover_buf_id = landcoverBufID;
         glEnableVertexAttribArray(2);
-        glBufferData(GL_ARRAY_BUFFER, Nvertices*sizeof(GLubyte), NULL, GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, (Nvertices+1)*sizeof(GLubyte), NULL, GL_STATIC_DRAW);
         glVertexAttribPointer(2, 1, GL_UNSIGNED_BYTE, GL_FALSE, 0, NULL);
         GLubyte* landcover_classes = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
+
+        if(landcover_classes == NULL)
+        {
+            MSG("glMapBuffer() failed: not enough memory for a mesh of %d vertices / %d triangles (try a smaller --zfar, or coarser DEMs)",
+                Nvertices, ctx->Ntriangles);
+            goto done;
+        }
 
         // meters/cell, East-West and North-South. Same formula as the
         // (disabled) CPU-side paths below, factored out since the normal
@@ -177,6 +315,9 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
         {
             for( int i=0; i<2*render_radius_cells; i++ )
             {
+                if(!VERTEX_NEEDED((size_t)j*W + i))
+                    continue;
+
                 int32_t z = horizonator_dem_sample(&ctx->dems, i,j);
 
                 // Several paths are available. These require corresponding
@@ -273,114 +414,53 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
         assert( vertex_buf_idx == Nvertices*3 );
     }
 
-    // Optional azimuth restriction: precompute, for each DEM cell, whether
-    // it lies within [mesh_az_deg0,mesh_az_deg1] (plus a margin), or close
-    // enough to the viewer to always be included. NULL means "no
-    // restriction: mesh the whole loaded circle", to keep the existing
-    // behavior for callers that don't ask for this (e.g. the interactive
-    // tool, which lets the user pan beyond the initial view)
-    if(restrict_mesh_azimuth)
-    {
-        cell_in_view = malloc((size_t)(2*render_radius_cells) * (size_t)(2*render_radius_cells));
-        if(cell_in_view == NULL)
-        {
-            MSG("malloc(cell_in_view) failed");
-            goto done;
-        }
-
-        // Same formula as horizonator_move() uses to place the viewer
-        // within the loaded cell grid
-        const float viewer_cell_i =
-            (viewer_lon - ctx->dems.origin_dem_lon_lat[0]) * ctx->dems.cells_per_deg -
-            ctx->dems.origin_dem_cellij[0];
-        const float viewer_cell_j =
-            (viewer_lat - ctx->dems.origin_dem_lon_lat[1]) * ctx->dems.cells_per_deg -
-            ctx->dems.origin_dem_cellij[1];
-        const float cos_viewer_lat_local = cosf(viewer_lat * (float)M_PI/180.0f);
-
-        const float az_center = (mesh_az_deg0 + mesh_az_deg1)/2.0f;
-        const float az_lo     = mesh_az_deg0 - MESH_AZIMUTH_MARGIN_DEG;
-        const float az_hi     = mesh_az_deg1 + MESH_AZIMUTH_MARGIN_DEG;
-
-        const int W = 2*render_radius_cells;
-        for(int j=0; j<W; j++)
-            for(int i=0; i<W; i++)
-            {
-                const float di = (float)i - viewer_cell_i;
-                const float dj = (float)j - viewer_cell_j;
-
-                bool in_view;
-                if(fabsf(di) <= MESH_INNER_RADIUS_CELLS && fabsf(dj) <= MESH_INNER_RADIUS_CELLS)
-                    in_view = true;
-                else
-                {
-                    // Same azimuth definition as vertex.glsl: 0 = North, 90 = East
-                    float az_deg = atan2f(di*cos_viewer_lat_local, dj) * 180.0f/(float)M_PI;
-
-                    // Unwrap az_deg to within 180 of az_center, to handle
-                    // the +-180 wraparound correctly regardless of where
-                    // az_center falls
-                    float d = az_deg - az_center;
-                    d -= 360.0f * roundf(d/360.0f);
-                    az_deg = az_center + d;
-
-                    in_view = (az_deg >= az_lo && az_deg <= az_hi);
-                }
-
-                cell_in_view[j*W + i] = in_view ? 1 : 0;
-            }
-    }
-
     // indices
     {
         GLuint indexBufID;
         glGenBuffers(1, &indexBufID);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBufID);
         ctx->index_buf_id = indexBufID;
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, ctx->Ntriangles*3*sizeof(GLuint), NULL, GL_STATIC_DRAW);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, ((size_t)ctx->Ntriangles+1)*3*sizeof(GLuint), NULL, GL_STATIC_DRAW);
 
         GLuint* indices = glMapBuffer(GL_ELEMENT_ARRAY_BUFFER, GL_WRITE_ONLY);
-        int idx = 0;
-        const int W = 2*render_radius_cells;
-        for( int j=0; j<(2*render_radius_cells-1); j++ )
+
+        if(indices == NULL)
         {
-            for( int i=0; i<(2*render_radius_cells-1); i++ )
-            {
-                if(cell_in_view != NULL)
-                {
-                    // Skip this quad entirely unless at least one of its 4
-                    // corners is in view. This may keep a thin sliver of
-                    // extra triangles right at the boundary; that's fine
-                    bool any_in_view =
-                        cell_in_view[(j+0)*W + (i+0)] ||
-                        cell_in_view[(j+1)*W + (i+1)] ||
-                        cell_in_view[(j+1)*W + (i+0)] ||
-                        cell_in_view[(j+0)*W + (i+1)];
-                    if(!any_in_view)
-                        continue;
-                }
-
-                indices[idx++] = (j + 0)*(2*render_radius_cells) + (i + 0);
-                indices[idx++] = (j + 1)*(2*render_radius_cells) + (i + 1);
-                indices[idx++] = (j + 1)*(2*render_radius_cells) + (i + 0);
-
-                indices[idx++] = (j + 0)*(2*render_radius_cells) + (i + 0);
-                indices[idx++] = (j + 0)*(2*render_radius_cells) + (i + 1);
-                indices[idx++] = (j + 1)*(2*render_radius_cells) + (i + 1);
-            }
+            MSG("glMapBuffer() failed: not enough memory for a mesh of %d vertices / %d triangles (try a smaller --zfar, or coarser DEMs)",
+                Nvertices, ctx->Ntriangles);
+            goto done;
         }
+        size_t idx = 0;
+        for( int j=0; j<W-1; j++ )
+            for( int i=0; i<W-1; i++ )
+            {
+                if(!QUAD_KEPT(i,j))
+                    continue;
+
+                const size_t c00 = (size_t)j*W + i;
+                const GLuint v00 = (GLuint)VERTEX_INDEX(c00);
+                const GLuint v01 = (GLuint)VERTEX_INDEX(c00 + 1);
+                const GLuint v10 = (GLuint)VERTEX_INDEX(c00 + W);
+                const GLuint v11 = (GLuint)VERTEX_INDEX(c00 + W + 1);
+
+                indices[idx++] = v00;
+                indices[idx++] = v11;
+                indices[idx++] = v10;
+
+                indices[idx++] = v00;
+                indices[idx++] = v01;
+                indices[idx++] = v11;
+            }
+        assert(idx == (size_t)ctx->Ntriangles*3);
         int res = glUnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
         assert( res == GL_TRUE );
-        assert(idx <= ctx->Ntriangles*3);
-
-        // cell_in_view may have shrunk the actual triangle count below the
-        // worst-case estimate used to size the buffer above
-        ctx->Ntriangles = idx/3;
     }
 
     result = true;
  done:
     free(cell_in_view);
+    free(needed);
+    free(word_start);
     return result;
 }
 
