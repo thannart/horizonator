@@ -101,16 +101,30 @@ vec3 material_color_procedural(float elevation, float slope_nz)
 // preferred wherever build-landcover-tiles.py has prepared it, but a point
 // outside that coverage should still get an approximate material, not the
 // flat legacy gray
+//
+// A real, planimetric land-cover source (OCS GE/WorldCover, both derived
+// from an overhead view) can't be trusted on a near-vertical slope: the
+// DEM itself can only represent a cliff as a steep ramp spanning several
+// cells, never a true vertical face, so the sample taken there can land
+// on the horizontal footprint of neighboring vegetated terrain instead of
+// the cliff's actual rock. This shows up as green cliffs, and is far more
+// visible in a grazing panorama view than it would be looking straight
+// down at a map. So: same slope_nz<SLOPE_ROCK_NZ rule as the procedural
+// fallback below, applied here too, but only to the vegetation classes --
+// LANDCOVER_ROCK/SNOWICE/WATER stay as classified, since a steep slope is
+// unremarkable for bare rock and can be entirely legitimate for a couloir/
+// icefall or a cliff behind a lake
 vec3 material_color(float landcover_class, float elevation, float slope_nz)
 {
-    if(landcover_class == LANDCOVER_FOREST)           return COLOR_FOREST;
-    if(landcover_class == LANDCOVER_GRASS)            return COLOR_GRASS;
+    bool steep = slope_nz < SLOPE_ROCK_NZ;
+    if(landcover_class == LANDCOVER_FOREST)           return steep ? COLOR_ROCK : COLOR_FOREST;
+    if(landcover_class == LANDCOVER_GRASS)            return steep ? COLOR_ROCK : COLOR_GRASS;
     if(landcover_class == LANDCOVER_ROCK)             return COLOR_ROCK;
     if(landcover_class == LANDCOVER_SNOWICE)          return COLOR_SNOW;
     if(landcover_class == LANDCOVER_WATER)            return COLOR_WATER;
-    if(landcover_class == LANDCOVER_FOREST_DECIDUOUS) return COLOR_FOREST_DECIDUOUS;
-    if(landcover_class == LANDCOVER_FOREST_CONIFER)   return COLOR_FOREST_CONIFER;
-    if(landcover_class == LANDCOVER_SHRUB)            return COLOR_SHRUB;
+    if(landcover_class == LANDCOVER_FOREST_DECIDUOUS) return steep ? COLOR_ROCK : COLOR_FOREST_DECIDUOUS;
+    if(landcover_class == LANDCOVER_FOREST_CONIFER)   return steep ? COLOR_ROCK : COLOR_FOREST_CONIFER;
+    if(landcover_class == LANDCOVER_SHRUB)            return steep ? COLOR_ROCK : COLOR_SHRUB;
     return material_color_procedural(elevation, slope_nz);
 }
 
