@@ -211,10 +211,13 @@ OCSGE_CODE_CS_TO_LANDCOVER = {
     'CS2.2.2':   LANDCOVER_GRASS,             # Autres formations non ligneuses (lichen, mousse...)
 }
 
-# Grid step for the intermediate raster in rasterize_ocsge_to_tile_grid(): well
-# under our ~65-90m output cells, so nearest-neighbor sampling of it is
-# effectively exact
-OCSGE_INTERMEDIATE_RES_M = 25
+# Grid step for the intermediate raster in rasterize_ocsge_to_tile_grid():
+# scaled to stay well under our output cell size, so nearest-neighbor
+# sampling of it is effectively exact. 25m was tuned for SRTM3's ~65-90m
+# cells; left fixed, it's comparable to (not "well under") an SRTM1 cell
+# (~22-31m), which aliased OCS GE polygon edges once meshed at that finer
+# resolution instead of looking any crisper
+OCSGE_INTERMEDIATE_RES_M = 25 * 1200 / CELLS_PER_DEG
 
 CORINE_GLACIER_CODE = 335 # "Glaciers et neiges eternelles"
 
