@@ -35,7 +35,7 @@ in float atmo_t_fragment;
 
 const float SNOW_LINE_M   = 2800.0; // above this: snow, any slope
 const float TREE_LINE_M   = 1800.0; // below (and not snow/rock): forest
-const float SLOPE_ROCK_NZ = 0.55;   // normal.z under this: bare rock
+const float SLOPE_ROCK_NZ = 0.77;   // normal.z under this: bare rock
 
 const vec3 COLOR_FOREST = vec3(0.35, 0.42, 0.30);
 const vec3 COLOR_GRASS  = vec3(0.55, 0.58, 0.38);

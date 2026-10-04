@@ -923,6 +923,62 @@ bool horizonator_init( // output
         if( strlen(msg) )
             printf("program info after glUseProgram: %s\n", msg);
 
+        // The sky: a second, minimal program (no geometry stage; see
+        // horizonator.h). Compiled here alongside the main one; left
+        // unused (ctx->program stays the active one) until
+        // horizonator_redraw() binds it for the sky's own draw call
+        {
+            const GLchar* skyVertexShaderSource =
+#include "sky_vertex.glsl.h"
+                ;
+            const GLchar* skyFragmentShaderSource =
+#include "sky_fragment.glsl.h"
+                ;
+
+            ctx->sky_program = glCreateProgram();
+            assert_opengl();
+
+            GLuint skyVertexShader = glCreateShader(GL_VERTEX_SHADER);
+            assert_opengl();
+            glShaderSource(skyVertexShader, 1, (const GLchar**)&skyVertexShaderSource, NULL);
+            assert_opengl();
+            glCompileShader(skyVertexShader);
+            assert_opengl();
+            glGetShaderInfoLog(skyVertexShader, sizeof(msg), &len, msg);
+            if(strlen(msg))
+                printf("sky vertex shader info: %s\n", msg);
+            glAttachShader(ctx->sky_program, skyVertexShader);
+            assert_opengl();
+
+            GLuint skyFragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+            assert_opengl();
+            glShaderSource(skyFragmentShader, 1, (const GLchar**)&skyFragmentShaderSource, NULL);
+            assert_opengl();
+            glCompileShader(skyFragmentShader);
+            assert_opengl();
+            glGetShaderInfoLog(skyFragmentShader, sizeof(msg), &len, msg);
+            if(strlen(msg))
+                printf("sky fragment shader info: %s\n", msg);
+            glAttachShader(ctx->sky_program, skyFragmentShader);
+            assert_opengl();
+
+            glLinkProgram(ctx->sky_program); assert_opengl();
+            glGetProgramInfoLog(ctx->sky_program, sizeof(msg), &len, msg);
+            if(strlen(msg))
+                printf("sky program info after glLinkProgram(): %s\n", msg);
+
+            glDeleteShader(skyVertexShader);   assert_opengl();
+            glDeleteShader(skyFragmentShader); assert_opengl();
+
+            ctx->uniform_sky_az_deg0 = glGetUniformLocation(ctx->sky_program, "az_deg0"); assert_opengl();
+            ctx->uniform_sky_az_deg1 = glGetUniformLocation(ctx->sky_program, "az_deg1"); assert_opengl();
+            ctx->uniform_sky_aspect  = glGetUniformLocation(ctx->sky_program, "aspect");  assert_opengl();
+            ctx->uniform_sky_sun_dir = glGetUniformLocation(ctx->sky_program, "sun_dir"); assert_opengl();
+
+            // Restore: everything past this point (including the rest of
+            // this very function) assumes ctx->program is the bound one
+            glUseProgram(ctx->program); assert_opengl();
+        }
 
 #define make_and_set_uniform(gltype, name, expr) do {                   \
             GLint uniform_ ## name = glGetUniformLocation(ctx->program, #name); \
@@ -1076,6 +1132,8 @@ void horizonator_deinit( horizonator_context_t* ctx )
             glDeleteTextures(1, &ctx->texture_id);
         if(ctx->program != 0)
             glDeleteProgram(ctx->program);
+        if(ctx->sky_program != 0)
+            glDeleteProgram(ctx->sky_program);
 
         if(ctx->offscreen.inited)
         {
@@ -1363,6 +1421,41 @@ bool horizonator_redraw(const horizonator_context_t* ctx)
     }
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // Sky: drawn first (a single full-screen triangle, no geometry),
+    // replacing the old flat white background. Depth test/write are off
+    // for this draw, so it can neither occlude nor be occluded by the
+    // terrain drawn right after -- it's always exactly "as far back as
+    // possible", without relying on depth-buffer tricks that would break
+    // if a terrain point's own depth happened to be beyond whatever fixed
+    // depth this triangle would otherwise write. Its az_deg0/az_deg1/
+    // aspect/sun_dir are kept in sync with ctx->program's by copying them
+    // right here (via glGetUniformfv) rather than mirroring every setter
+    // that can change them (horizonator_pan_zoom(), horizonator_resized(),
+    // horizonator_set_sun())
+    {
+        float az_deg0, az_deg1, aspect, sun_dir[3];
+        glGetUniformfv(ctx->program, ctx->uniform_az_deg0, &az_deg0); assert_opengl();
+        glGetUniformfv(ctx->program, ctx->uniform_az_deg1, &az_deg1); assert_opengl();
+        glGetUniformfv(ctx->program, ctx->uniform_aspect,  &aspect);  assert_opengl();
+        glGetUniformfv(ctx->program, ctx->uniform_sun_dir, sun_dir);  assert_opengl();
+
+        glUseProgram(ctx->sky_program); assert_opengl();
+        glUniform1f (ctx->uniform_sky_az_deg0, az_deg0);        assert_opengl();
+        glUniform1f (ctx->uniform_sky_az_deg1, az_deg1);        assert_opengl();
+        glUniform1f (ctx->uniform_sky_aspect,  aspect);         assert_opengl();
+        glUniform3fv(ctx->uniform_sky_sun_dir, 1, sun_dir);     assert_opengl();
+
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        assert_opengl();
+        glEnable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST);
+
+        glUseProgram(ctx->program); assert_opengl();
+    }
+
     glDrawElements(GL_TRIANGLES, ctx->Ntriangles*3, GL_UNSIGNED_INT, NULL);
     return true;
 }

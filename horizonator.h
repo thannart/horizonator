@@ -40,6 +40,18 @@ typedef struct
 
     uint32_t program;
 
+    // A second, minimal program (no geometry: a single full-screen
+    // triangle, see sky_vertex.glsl/sky_fragment.glsl) that paints a
+    // procedural sky -- gradient + sun glow -- behind the terrain,
+    // replacing the old flat white background. Drawn first in
+    // horizonator_redraw(), with its own az_deg0/az_deg1/aspect/sun_dir
+    // uniforms kept in sync with ctx->program's by copying them (via
+    // glGetUniformfv) right before each draw, rather than duplicating
+    // every setter (horizonator_pan_zoom() etc.) to also write here
+    uint32_t sky_program;
+    int32_t uniform_sky_az_deg0, uniform_sky_az_deg1, uniform_sky_aspect;
+    int32_t uniform_sky_sun_dir;
+
     // GL object handles created by horizonator_init(), needed so
     // horizonator_deinit() can explicitly glDelete* them. Previously these
     // were local variables inside horizonator_init(), discarded as soon as
