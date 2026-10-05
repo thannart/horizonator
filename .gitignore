@@ -9,3 +9,4 @@ cscope.out
 horizonator
 standalone
 *.docstring.h
+__pycache__/

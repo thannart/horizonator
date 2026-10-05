@@ -18,8 +18,8 @@ CFLAGS    += --std=gnu99
 CCXXFLAGS += -Wno-missing-field-initializers
 
 ################# library ###############
-LIB_SOURCES += horizonator-lib.c dem.c annotator.c
-horizonator-lib.o: vertex.glsl.h geometry.glsl.h fragment.glsl.h
+LIB_SOURCES += horizonator-lib.c dem.c landcover.c annotator.c
+horizonator-lib.o: vertex.glsl.h geometry.glsl.h fragment.glsl.h sky_vertex.glsl.h sky_fragment.glsl.h
 %.glsl.h: %.glsl
 	sed 's/.*/"&\\n"/g' $^ > $@.tmp && mv $@.tmp $@
 EXTRA_CLEAN += *.glsl.h
