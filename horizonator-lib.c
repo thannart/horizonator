@@ -448,7 +448,7 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
 // ctx->program must be the bound program
 static bool make_landcover_texture(horizonator_context_t* ctx)
 {
-    const horizonator_landcover_context_t* lc = &ctx->landcover;
+    horizonator_landcover_context_t* lc = &ctx->landcover;
 
     GLint max_size, max_layers;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE,         &max_size);   assert_opengl();
@@ -529,16 +529,19 @@ static bool make_landcover_texture(horizonator_context_t* ctx)
                                 width, width, 1,
                                 GL_RED_INTEGER, GL_UNSIGNED_BYTE, buf);
                 assert_opengl();
+
+                // The texture now holds this tile: drop its mmap right
+                // away. Each tile was just read in full, so keeping them
+                // all mapped until the end would hold every one of them
+                // resident on top of the texture itself, roughly doubling
+                // the peak memory of this function.
+                // horizonator_deinit() releasing them again later is
+                // harmless
+                horizonator_landcover_release_tile(lc, i, j);
             }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glActiveTexture(GL_TEXTURE0); assert_opengl();
     free(buf);
-
-    // The texture now holds everything: the mmap-ed tiles aren't needed
-    // anymore, and would otherwise stay resident (they were all just read
-    // in full) for the life of the context. horizonator_deinit() calling
-    // this again later is harmless
-    horizonator_landcover_deinit(&ctx->landcover);
 
     glUniform1iv(glGetUniformLocation(ctx->program, "landcover_tile_layer"),
                  lc->Ndems_ij[0]*lc->Ndems_ij[1], tile_layer);

@@ -158,22 +158,26 @@ bool horizonator_landcover_init(// output
     return true;
 }
 
+void horizonator_landcover_release_tile( horizonator_landcover_context_t* ctx,
+                                         int i, int j )
+{
+    if( ctx->tiles[i][j] != NULL && ctx->tiles[i][j] != MAP_FAILED )
+    {
+        munmap( ctx->tiles[i][j], ctx->mmap_sizes[i][j] );
+        ctx->tiles[i][j] = NULL;
+    }
+    if( ctx->mmap_fd[i][j] > 0 )
+    {
+        close( ctx->mmap_fd[i][j] );
+        ctx->mmap_fd[i][j] = 0;
+    }
+}
+
 void horizonator_landcover_deinit( horizonator_landcover_context_t* ctx )
 {
     for( int i=0; i<max_Ndems_ij; i++)
         for( int j=0; j<max_Ndems_ij; j++)
-        {
-            if( ctx->tiles[i][j] != NULL && ctx->tiles[i][j] != MAP_FAILED )
-            {
-                munmap( ctx->tiles[i][j], ctx->mmap_sizes[i][j] );
-                ctx->tiles[i][j] = NULL;
-            }
-            if( ctx->mmap_fd[i][j] > 0 )
-            {
-                close( ctx->mmap_fd[i][j] );
-                ctx->mmap_fd[i][j] = 0;
-            }
-        }
+            horizonator_landcover_release_tile(ctx, i, j);
 }
 
 void horizonator_landcover_tile_resampled(// output

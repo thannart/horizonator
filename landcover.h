@@ -84,6 +84,14 @@ bool horizonator_landcover_init(// output
 
 void horizonator_landcover_deinit( horizonator_landcover_context_t* ctx );
 
+// Unmaps and closes one tile (same indexing as ctx->tiles); it then reads
+// as missing. Lets a caller that copies the tiles elsewhere (the GPU
+// texture) drop each one as soon as it's copied, instead of keeping them
+// all resident until horizonator_landcover_deinit(). Harmless on a tile
+// that's already released or was never loaded
+void horizonator_landcover_release_tile( horizonator_landcover_context_t* ctx,
+                                         int i, int j );
+
 // Writes tile (i,j) (same indexing as ctx->tiles: relative to the origin
 // tile) into out[], resampled (nearest neighbor) to cells_per_deg:
 // (cells_per_deg+1)^2 bytes, in the same row order as the files (north row
