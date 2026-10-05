@@ -23,11 +23,14 @@ horizonator itself.
 
 For every 1-degree tile that horizonator_dem_init() would load for the
 given viewer position and radius (the same SRTM .hgt tile grid: see
-dem.c), this script produces a matching 'N45E004.landcover' file: one raw
-byte per DEM cell, classifying that point into one of the
-horizonator_landcover_class_t codes in landcover.h. horizonator_landcover_
-sample() reads these back with the exact same indexing dem.c uses for the
-.hgt files, so the two grids line up automatically.
+dem.c), this script produces a matching 'N45E004.landcover' file: a raw
+(N+1)x(N+1) byte grid, N cells per degree, north row first, each byte
+classifying that point into one of the horizonator_landcover_class_t
+codes in landcover.h. Adjacent tiles overlap by one cell, like the .hgt
+files. N defaults to the DEM resolution (--srtm1), but can be set
+independently (--cells-per-deg): horizonator infers it from the file
+size, and samples the land cover per pixel, not per mesh vertex, so
+finer tiles give finer land cover than the DEM mesh.
 
 Three data sources are combined, in priority order (later overrides
 earlier, wherever it has data):
@@ -79,10 +82,18 @@ def parse_args():
                                      formatter_class = argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--srtm1',
                         action = 'store_true',
-                        help = '''Bake tiles matching the SRTM1 (1-arcsecond,
-                        3601x3601) grid instead of the default SRTM3
-                        (3-arcsecond, 1201x1201). Must match the --SRTM1
-                        setting horizonator itself is run with''')
+                        help = '''Bake tiles at the SRTM1 resolution
+                        (1-arcsecond, 3601x3601) instead of the default
+                        SRTM3 one (3-arcsecond, 1201x1201). Ignored if
+                        --cells-per-deg is given''')
+    parser.add_argument('--cells-per-deg',
+                        type = int,
+                        default = None,
+                        help = '''Bake tiles at this many cells per degree,
+                        independently of the DEM resolution: e.g. 3600 for
+                        SRTM3 renders, to get finer land cover than the
+                        mesh. Costs (N+1)^2 bytes of memory per tile at
+                        render time (13MB at 3600), up to 36 tiles''')
     parser.add_argument('--out-dir',
                         type = str,
                         default = None,
@@ -152,7 +163,13 @@ worldcover_cache_dir = expand_user(args.worldcover_cache_dir)
 os.makedirs(out_dir,               exist_ok = True)
 os.makedirs(worldcover_cache_dir,  exist_ok = True)
 
-CELLS_PER_DEG = 3600 if args.srtm1 else 1200
+if args.cells_per_deg is not None:
+    if args.cells_per_deg < 1:
+        print("--cells-per-deg must be >= 1", file = sys.stderr)
+        sys.exit(1)
+    CELLS_PER_DEG = args.cells_per_deg
+else:
+    CELLS_PER_DEG = 3600 if args.srtm1 else 1200
 # One extra row/col: adjacent tiles overlap by one cell, exactly like the
 # SRTM .hgt files this mirrors (see dem.c)
 TILE_WIDTH = CELLS_PER_DEG + 1

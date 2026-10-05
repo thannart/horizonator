@@ -63,8 +63,11 @@ typedef struct
     // one process OOM the machine). 0 means "not created" (e.g. texture_id
     // when render_texture is false)
     uint32_t vertex_array_id;
-    uint32_t vertex_buf_id, normal_buf_id, landcover_buf_id, index_buf_id;
+    uint32_t vertex_buf_id, normal_buf_id, index_buf_id;
     uint32_t texture_id;
+    // Land-cover classes, one texture-array layer per loaded tile (see
+    // make_landcover_texture() in horizonator-lib.c)
+    uint32_t landcover_texture_id;
 
     float viewer_lat, viewer_lon;
 
