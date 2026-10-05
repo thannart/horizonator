@@ -23,12 +23,25 @@ in vec3 normal_fragment;
 uniform float materials_scale;
 in float elevation_fragment;
 
-// Real land-cover class (see landcover.h), from pre-baked ESA WorldCover /
-// IGN OCS GE / CORINE Land Cover tiles (build-landcover-tiles.py), sampled
-// per vertex on the CPU and passed through unblended (see the flat
-// qualifier in geometry.glsl). 0 means no real data was available at this
-// point: falls back to the procedural elevation/slope classification below
-flat in float landcover_class_fragment;
+// Real land-cover classes (see landcover.h), from pre-baked ESA WorldCover /
+// IGN OCS GE / CORINE Land Cover tiles (build-landcover-tiles.py): one
+// texture-array layer per loaded 1-degree tile (see landcover_tile_layer),
+// north row first, (landcover_cells_per_deg+1)^2 cells per layer (see
+// make_landcover_texture() in horizonator-lib.c). landcover_cells_per_deg
+// is 0 if no tile was loaded. Looked up per fragment, at the fragment's
+// interpolated DEM cell coordinates, so the land cover isn't limited to
+// the mesh resolution
+uniform usampler2DArray landcover_tex;
+uniform int   landcover_cells_per_deg;
+uniform ivec2 landcover_Ndems;
+// Texture layer of each tile (tile_j*Ndems_x + tile_i), or -1 if that tile
+// has no data. 36 = max_Ndems_ij^2 (dem.h)
+uniform int   landcover_tile_layer[36];
+// DEM cell coordinates of the mesh's (0,0) cell, counted from the SW
+// corner of the origin tile; and the DEM resolution
+uniform vec2  landcover_origin_cell;
+uniform float landcover_dem_cells_per_deg;
+in vec2 cell_ij_fragment;
 
 // 0 at znear_color, 1 at zfar_color (see vertex.glsl)
 in float atmo_t_fragment;
@@ -79,7 +92,7 @@ const vec3 COLOR_NEAR_DEFAULT = vec3(0.30, 0.30, 0.30);
 const vec3 COLOR_FAR = vec3(0.80, 0.84, 0.92);
 
 // Purely procedural fallback, used wherever no real land-cover data was
-// baked in for this point (landcover_class_fragment == LANDCOVER_UNKNOWN):
+// baked in for this point (landcover_class_at() == LANDCOVER_UNKNOWN):
 // no aerial imagery or land-cover data involved, just elevation (snow
 // line) and slope steepness (bare rock), with forest below the tree line
 // and alpine grass above it otherwise
@@ -94,9 +107,69 @@ vec3 material_color_procedural(float elevation, float slope_nz)
     return COLOR_FOREST;
 }
 
+// The LANDCOVER_* class at DEM cell coordinates cell_ij (fractional), or
+// LANDCOVER_UNKNOWN if there's no data there
+float landcover_class_at(vec2 cell_ij)
+{
+    if(landcover_cells_per_deg == 0)
+        return LANDCOVER_UNKNOWN;
+
+    // Degrees from the SW corner of the origin tile
+    vec2  deg  = (cell_ij + landcover_origin_cell) / landcover_dem_cells_per_deg;
+    // A point exactly on the far edge of the last tile belongs to that
+    // tile (adjacent tiles overlap by one cell, so either one would do
+    // everywhere else)
+    ivec2 tile = clamp(ivec2(floor(deg)), ivec2(0), landcover_Ndems - 1);
+    vec2  frac = deg - vec2(tile);
+    if(any(lessThan(frac, vec2(0.0))) || any(greaterThan(frac, vec2(1.0))))
+        return LANDCOVER_UNKNOWN;
+
+    // Class codes can't be interpolated, but nearest-neighbor lookups give
+    // square, grid-aligned class boundaries, very visible at the grazing
+    // angles of a panorama. So: look at the 4 cells around this point and
+    // keep the class with the highest total bilinear weight. Same cost in
+    // memory, but the boundaries between classes come out as smooth curves
+    // through the cells instead of staircases along their edges
+    int   n    = landcover_cells_per_deg;
+    vec2  p    = frac * float(n);
+    ivec2 p0   = min(ivec2(floor(p)), ivec2(n-1));
+    vec2  f    = p - vec2(p0);
+    int   layer = landcover_tile_layer[tile.y*landcover_Ndems.x + tile.x];
+    if(layer < 0)
+        return LANDCOVER_UNKNOWN;
+
+    // Rows are stored north row first
+    uint c[4];
+    c[0] = texelFetch(landcover_tex, ivec3(p0.x,   n - p0.y,     layer), 0).r;
+    c[1] = texelFetch(landcover_tex, ivec3(p0.x+1, n - p0.y,     layer), 0).r;
+    c[2] = texelFetch(landcover_tex, ivec3(p0.x,   n - p0.y - 1, layer), 0).r;
+    c[3] = texelFetch(landcover_tex, ivec3(p0.x+1, n - p0.y - 1, layer), 0).r;
+    float w[4];
+    w[0] = (1.0-f.x)*(1.0-f.y);
+    w[1] =      f.x *(1.0-f.y);
+    w[2] = (1.0-f.x)*     f.y;
+    w[3] =      f.x *     f.y;
+
+    uint  best        = c[0];
+    float best_weight = -1.0;
+    for(int k=0; k<4; k++)
+    {
+        float weight = 0.0;
+        for(int l=0; l<4; l++)
+            if(c[l] == c[k])
+                weight += w[l];
+        if(weight > best_weight)
+        {
+            best        = c[k];
+            best_weight = weight;
+        }
+    }
+    return float(best);
+}
+
 // landcover_class is a float holding one of the LANDCOVER_* integer codes
-// above (from a GL_UNSIGNED_BYTE vertex attribute, so it arrives here as an
-// exact integral value, not needing to be rounded). LANDCOVER_UNKNOWN falls
+// above (from landcover_class_at(), so an exact integral value, not
+// needing to be rounded). LANDCOVER_UNKNOWN falls
 // back to the procedural elevation/slope classification: real data is
 // preferred wherever build-landcover-tiles.py has prepared it, but a point
 // outside that coverage should still get an approximate material, not the
@@ -144,9 +217,12 @@ void main(void)
 
     // materials_scale==0 must reproduce the old, untinted look exactly:
     // mix(COLOR_NEAR_DEFAULT, material_color(...), 0.0) == COLOR_NEAR_DEFAULT
-    vec3 near_color = mix(COLOR_NEAR_DEFAULT,
-                          material_color(landcover_class_fragment, elevation_fragment, n.z),
-                          materials_scale);
+    vec3 near_color = COLOR_NEAR_DEFAULT;
+    if(materials_scale > 0.0)
+        near_color = mix(COLOR_NEAR_DEFAULT,
+                         material_color(landcover_class_at(cell_ij_fragment),
+                                        elevation_fragment, n.z),
+                         materials_scale);
 
     // Atmospheric haze: blend towards the far color with distance. This
     // is the ONLY distance-dependent darkening/tinting left (on top of

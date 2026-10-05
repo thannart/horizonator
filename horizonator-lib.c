@@ -52,8 +52,9 @@
 
 
 // Builds (or rebuilds) the terrain mesh -- the VAO plus the position/
-// normal/landcover-class VBOs and the triangle-index EBO -- from ctx's
-// already-loaded DEM/landcover data. Called once by horizonator_init()
+// normal VBOs and the triangle-index EBO -- from ctx's already-loaded DEM
+// data (land cover isn't part of the mesh: it's a texture, see
+// make_landcover_texture()). Called once by horizonator_init()
 // itself for the initial mesh, but also directly callable afterwards, on
 // that same already-inited context, to change the meshed azimuth wedge
 // (e.g. to render a wide panorama as a sequence of narrow tiles: call this
@@ -91,7 +92,6 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
         glDeleteVertexArrays(1, &ctx->vertex_array_id);
         glDeleteBuffers(1, &ctx->vertex_buf_id);
         glDeleteBuffers(1, &ctx->normal_buf_id);
-        glDeleteBuffers(1, &ctx->landcover_buf_id);
         glDeleteBuffers(1, &ctx->index_buf_id);
     }
 
@@ -280,25 +280,6 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
             goto done;
         }
 
-        // Per-vertex land-cover class (see landcover.h), for the
-        // --materials real-data path. One byte/vertex: this is a small
-        // integer code, not something that benefits from float precision
-        GLuint landcoverBufID;
-        glGenBuffers(1, &landcoverBufID);
-        glBindBuffer(GL_ARRAY_BUFFER, landcoverBufID);
-        ctx->landcover_buf_id = landcoverBufID;
-        glEnableVertexAttribArray(2);
-        glBufferData(GL_ARRAY_BUFFER, (Nvertices+1)*sizeof(GLubyte), NULL, GL_STATIC_DRAW);
-        glVertexAttribPointer(2, 1, GL_UNSIGNED_BYTE, GL_FALSE, 0, NULL);
-        GLubyte* landcover_classes = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-
-        if(landcover_classes == NULL)
-        {
-            MSG("glMapBuffer() failed: not enough memory for a mesh of %d vertices / %d triangles (try a smaller --zfar, or coarser DEMs)",
-                Nvertices, ctx->Ntriangles);
-            goto done;
-        }
-
         // meters/cell, East-West and North-South. Same formula as the
         // (disabled) CPU-side paths below, factored out since the normal
         // computation needs it on every vertex
@@ -309,7 +290,6 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
 
         int vertex_buf_idx    = 0;
         int normal_buf_idx    = 0;
-        int landcover_buf_idx = 0;
 
         for( int j=0; j<2*render_radius_cells; j++ )
         {
@@ -392,19 +372,11 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
                 normals[normal_buf_idx++] = nx*ninv;
                 normals[normal_buf_idx++] = ny*ninv;
                 normals[normal_buf_idx++] = nz*ninv;
-
-                landcover_classes[landcover_buf_idx++] =
-                    horizonator_landcover_sample(&ctx->landcover, i, j);
             }
         }
 
-        glBindBuffer(GL_ARRAY_BUFFER, landcoverBufID);
-        int res = glUnmapBuffer(GL_ARRAY_BUFFER);
-        assert( res == GL_TRUE );
-        assert( landcover_buf_idx == Nvertices );
-
         glBindBuffer(GL_ARRAY_BUFFER, normalBufID);
-        res = glUnmapBuffer(GL_ARRAY_BUFFER);
+        int res = glUnmapBuffer(GL_ARRAY_BUFFER);
         assert( res == GL_TRUE );
         assert( normal_buf_idx == Nvertices*3 );
 
@@ -462,6 +434,125 @@ bool horizonator_rebuild_mesh(horizonator_context_t* ctx,
     free(needed);
     free(word_start);
     return result;
+}
+
+// Uploads the loaded land-cover tiles (ctx->landcover) as a 2D texture
+// array, one layer per loaded 1-degree tile, and sets the uniforms fragment.glsl
+// needs to look up the class of each fragment. This replaces the old
+// per-vertex class attribute: that one capped the land cover at the DEM
+// resolution, and painted each mesh triangle in a single class (visible as
+// blocky, "square" snow patches and forest edges). Every layer uses the
+// resolution of the finest loaded tile; coarser tiles are resampled to it.
+// With no tile at all, a 1x1 dummy texture is made, so the sampler stays
+// valid, and landcover_cells_per_deg=0 tells the shader there's no data.
+// ctx->program must be the bound program
+static bool make_landcover_texture(horizonator_context_t* ctx)
+{
+    const horizonator_landcover_context_t* lc = &ctx->landcover;
+
+    GLint max_size, max_layers;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE,         &max_size);   assert_opengl();
+    glGetIntegerv(GL_MAX_ARRAY_TEXTURE_LAYERS, &max_layers); assert_opengl();
+
+    int cells_per_deg = lc->max_cells_per_deg;
+    if(cells_per_deg + 1 > max_size)
+    {
+        MSG("Land-cover tiles have %d cells/deg, but this GL can only do textures up to %d pixels wide. Resampling down to %d cells/deg",
+            cells_per_deg, max_size, max_size-1);
+        cells_per_deg = max_size - 1;
+    }
+    const int width = cells_per_deg > 0 ? cells_per_deg+1 : 1;
+
+    // Only the tiles that exist get a layer: tile_layer[] maps each tile
+    // (j*Ndems_x + i) to its layer, or -1 if there's no data there. A
+    // missing tile would otherwise cost a whole layer of LANDCOVER_UNKNOWN
+    // (13MB at 3600 cells/deg)
+    GLint tile_layer[max_Ndems_ij*max_Ndems_ij];
+    int   Nlayers = 0;
+    for(int j=0; j<lc->Ndems_ij[1]; j++)
+        for(int i=0; i<lc->Ndems_ij[0]; i++)
+            tile_layer[j*lc->Ndems_ij[0] + i] =
+                lc->tiles[i][j] != NULL ? Nlayers++ : -1;
+    if(Nlayers == 0)
+        Nlayers = 1; // the 1x1 dummy
+    assert(Nlayers <= max_layers);
+
+    uint8_t* buf = malloc((size_t)width*width);
+    if(buf == NULL)
+    {
+        MSG("malloc() failed for a %dx%d land-cover tile", width, width);
+        return false;
+    }
+
+    GLuint texID;
+    glGenTextures(1, &texID); assert_opengl();
+    ctx->landcover_texture_id = texID;
+
+    // Texture unit 0 is the OSM imagery (when enabled)
+    glActiveTexture(GL_TEXTURE1); assert_opengl();
+    glBindTexture(GL_TEXTURE_2D_ARRAY, texID); assert_opengl();
+    glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_R8UI, width, width, Nlayers);
+    if(glGetError() != GL_NO_ERROR)
+    {
+        MSG("Couldn't allocate the land-cover texture (%d layers of %dx%d): out of memory? Bake coarser land-cover tiles, or render a smaller area",
+            Nlayers, width, width);
+        free(buf);
+        return false;
+    }
+    // Class codes can't be interpolated: texelFetch() in the shader ignores
+    // these anyway, but nearest is the only meaningful setting
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S,     GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_EDGE);
+    assert_opengl();
+
+    // Rows are (cells_per_deg+1) bytes: not a multiple of 4 in general
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if(cells_per_deg == 0)
+    {
+        buf[0] = LANDCOVER_UNKNOWN;
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0,0,0, 1,1,1,
+                        GL_RED_INTEGER, GL_UNSIGNED_BYTE, buf);
+        assert_opengl();
+    }
+    else
+        for(int j=0; j<lc->Ndems_ij[1]; j++)
+            for(int i=0; i<lc->Ndems_ij[0]; i++)
+            {
+                const int layer = tile_layer[j*lc->Ndems_ij[0] + i];
+                if(layer < 0)
+                    continue;
+                horizonator_landcover_tile_resampled(buf, lc, i, j, cells_per_deg);
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0,
+                                0, 0, layer,
+                                width, width, 1,
+                                GL_RED_INTEGER, GL_UNSIGNED_BYTE, buf);
+                assert_opengl();
+            }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glActiveTexture(GL_TEXTURE0); assert_opengl();
+    free(buf);
+
+    // The texture now holds everything: the mmap-ed tiles aren't needed
+    // anymore, and would otherwise stay resident (they were all just read
+    // in full) for the life of the context. horizonator_deinit() calling
+    // this again later is harmless
+    horizonator_landcover_deinit(&ctx->landcover);
+
+    glUniform1iv(glGetUniformLocation(ctx->program, "landcover_tile_layer"),
+                 lc->Ndems_ij[0]*lc->Ndems_ij[1], tile_layer);
+    glUniform1i(glGetUniformLocation(ctx->program, "landcover_tex"), 1);
+    glUniform1i(glGetUniformLocation(ctx->program, "landcover_cells_per_deg"), cells_per_deg);
+    glUniform2i(glGetUniformLocation(ctx->program, "landcover_Ndems"),
+                lc->Ndems_ij[0], lc->Ndems_ij[1]);
+    glUniform2f(glGetUniformLocation(ctx->program, "landcover_origin_cell"),
+                (float)ctx->dems.origin_dem_cellij[0], (float)ctx->dems.origin_dem_cellij[1]);
+    glUniform1f(glGetUniformLocation(ctx->program, "landcover_dem_cells_per_deg"),
+                (float)ctx->dems.cells_per_deg);
+    assert_opengl();
+
+    return true;
 }
 
 // The main init routine. We support 3 modes:
@@ -1000,6 +1091,9 @@ bool horizonator_init( // output
         make_and_set_uniform(i, osmtile_lowestX, texture_ctx.osmtile_lowestXY[0]);
         make_and_set_uniform(i, osmtile_lowestY, texture_ctx.osmtile_lowestXY[1]);
 
+        if(!make_landcover_texture(ctx))
+            goto done;
+
         // These may be modified at runtime, so I make, but don't set
         ctx->uniform_aspect           = glGetUniformLocation(ctx->program, "aspect");           assert_opengl();
         ctx->uniform_az_deg0          = glGetUniformLocation(ctx->program, "az_deg0");          assert_opengl();
@@ -1126,10 +1220,11 @@ void horizonator_deinit( horizonator_context_t* ctx )
         glDeleteVertexArrays(1, &ctx->vertex_array_id);
         glDeleteBuffers(1, &ctx->vertex_buf_id);
         glDeleteBuffers(1, &ctx->normal_buf_id);
-        glDeleteBuffers(1, &ctx->landcover_buf_id);
         glDeleteBuffers(1, &ctx->index_buf_id);
         if(ctx->texture_id != 0)
             glDeleteTextures(1, &ctx->texture_id);
+        if(ctx->landcover_texture_id != 0)
+            glDeleteTextures(1, &ctx->landcover_texture_id);
         if(ctx->program != 0)
             glDeleteProgram(ctx->program);
         if(ctx->sky_program != 0)

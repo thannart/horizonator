@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <math.h>
 #include <sys/fcntl.h>
 #include <sys/mman.h>
 #include <sys/types.h>
@@ -76,15 +77,11 @@ bool horizonator_landcover_init(// output
 {
     *ctx = (horizonator_landcover_context_t){};
 
-    // Borrow the DEM grid geometry outright: the two tile sets are keyed by
-    // the exact same viewer/radius/SRTM-resolution choice, so recomputing
-    // this here could only ever introduce a mismatch, never fix one
+    // Borrow the DEM tile layout outright: the two tile sets cover the
+    // exact same 1-degree tiles, so recomputing this here could only ever
+    // introduce a mismatch, never fix one
     memcpy(ctx->origin_dem_lon_lat, dem_ctx->origin_dem_lon_lat, sizeof(ctx->origin_dem_lon_lat));
-    memcpy(ctx->origin_dem_cellij,  dem_ctx->origin_dem_cellij,  sizeof(ctx->origin_dem_cellij));
     memcpy(ctx->Ndems_ij,           dem_ctx->Ndems_ij,           sizeof(ctx->Ndems_ij));
-    ctx->cells_per_deg = dem_ctx->cells_per_deg;
-
-    const int expected_file_size = (ctx->cells_per_deg+1) * (ctx->cells_per_deg+1);
 
     for( int j = 0; j < ctx->Ndems_ij[1]; j++ )
         for( int i = 0; i < ctx->Ndems_ij[0]; i++ )
@@ -119,20 +116,22 @@ bool horizonator_landcover_init(// output
             int res = fstat(ctx->mmap_fd[i][j], &sb);
             assert( res == 0 );
 
-            // A tile that's the wrong size (most likely: built with the
-            // other --SRTM1 setting than what we're using now) is treated
-            // the same as a missing one -- a warning, not a hard failure.
-            // materials_scale users could easily have a mix of DEM
-            // resolutions cached (SRTM1 for one area, SRTM3 elsewhere,
-            // built at different times), so this must stay recoverable:
-            // aborting the whole render over one stale tile would be a
-            // much worse outcome than just falling back to the procedural
-            // classification for that tile's area
-            if(sb.st_size == 0 || sb.st_size != expected_file_size)
+            // The tile's resolution comes from its size alone: a square
+            // (N+1)x(N+1) grid (adjacent tiles overlap by one cell, like
+            // the .hgt files), any N. It doesn't have to match the DEM's
+            // resolution: tiles are resampled into a common texture
+            // resolution anyway (horizonator_landcover_tile_resampled()). A
+            // file that isn't such a square is treated the same as a
+            // missing one -- a warning, not a hard failure: aborting the
+            // whole render over one bad tile would be a much worse outcome
+            // than just falling back to the procedural classification for
+            // that tile's area
+            int width = (int)round(sqrt((double)sb.st_size));
+            if(sb.st_size == 0 || width < 2 || (off_t)width*width != sb.st_size)
             {
                 if(sb.st_size != 0)
-                    MSG("The landcover file '%s' has unexpected size (%zu; expected %d) -- ignoring it (was it built with a different --SRTM1 setting?)",
-                        filename, (size_t)sb.st_size, expected_file_size);
+                    MSG("The landcover file '%s' has unexpected size (%zu; expected a square (N+1)x(N+1) grid) -- ignoring it",
+                        filename, (size_t)sb.st_size);
                 close(ctx->mmap_fd[i][j]);
 
                 ctx->tiles     [i][j] = NULL;
@@ -150,6 +149,10 @@ bool horizonator_landcover_init(// output
                 MSG("Couldn't mmap the landcover file '%s'", filename );
                 return false;
             }
+
+            ctx->tile_cells_per_deg[i][j] = width - 1;
+            if(ctx->max_cells_per_deg < width - 1)
+                ctx->max_cells_per_deg = width - 1;
         }
 
     return true;
@@ -173,42 +176,42 @@ void horizonator_landcover_deinit( horizonator_landcover_context_t* ctx )
         }
 }
 
-uint8_t horizonator_landcover_sample(const horizonator_landcover_context_t* ctx,
-                                     int i,
-                                     int j)
+void horizonator_landcover_tile_resampled(// output
+                                          uint8_t* out,
+
+                                          // input
+                                          const horizonator_landcover_context_t* ctx,
+                                          int i, int j,
+                                          int cells_per_deg)
 {
-    if(i < 0 || j < 0) return LANDCOVER_UNKNOWN;
+    const int width_out = cells_per_deg + 1;
 
-    int cell_ij[2] = {
-        i + ctx->origin_dem_cellij[0],
-        j + ctx->origin_dem_cellij[1] };
-
-    int dem_ij[2];
-    for(int i=0; i<2; i++)
+    const unsigned char* tile = ctx->tiles[i][j];
+    if(tile == NULL)
     {
-        dem_ij[i]  = cell_ij[i] / ctx->cells_per_deg;
-        cell_ij[i] -= dem_ij[i] * ctx->cells_per_deg;
-
-        if(cell_ij[i] == 0)
-        {
-            dem_ij [i]--;
-            cell_ij[i] = ctx->cells_per_deg;
-        }
-
-        // dem_ij[i] can go negative right here: see the identical check in
-        // horizonator_dem_sample() (dem.c) for why
-        if( dem_ij[i] < 0 || dem_ij[i] >= ctx->Ndems_ij[i] ) return LANDCOVER_UNKNOWN;
+        memset(out, LANDCOVER_UNKNOWN, (size_t)width_out*width_out);
+        return;
     }
 
-    const unsigned char* tile = ctx->tiles[dem_ij[0]][dem_ij[1]];
-    if(tile == NULL)
-        return LANDCOVER_UNKNOWN;
+    const int cells_per_deg_in = ctx->tile_cells_per_deg[i][j];
+    const int width_in         = cells_per_deg_in + 1;
 
-    // Same SW-origin flip as horizonator_dem_sample(), one byte per cell (no
-    // endianness to worry about)
-    uint32_t p =
-        cell_ij[0] +
-        (ctx->cells_per_deg - cell_ij[1])*(ctx->cells_per_deg+1);
+    if(cells_per_deg_in == cells_per_deg)
+    {
+        memcpy(out, tile, (size_t)width_out*width_out);
+        return;
+    }
 
-    return tile[p];
+    // Nearest neighbor: a class code can't be interpolated. Both grids
+    // span the same degree, edge to edge, so cell k of the output sits at
+    // k*cells_per_deg_in/cells_per_deg in the input
+    for(int r=0; r<width_out; r++)
+    {
+        int r_in = (int)(((int64_t)r*cells_per_deg_in*2 + cells_per_deg) / (2*cells_per_deg));
+        for(int c=0; c<width_out; c++)
+        {
+            int c_in = (int)(((int64_t)c*cells_per_deg_in*2 + cells_per_deg) / (2*cells_per_deg));
+            out[(size_t)r*width_out + c] = tile[(size_t)r_in*width_in + c_in];
+        }
+    }
 }
