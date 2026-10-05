@@ -15,7 +15,7 @@ SYNOPSIS
     Tile 0: az [65.0, 75.0]...
     Tile 1: az [75.0, 85.0]...
     ...
-    Wrote panorama.png (4400x2000)
+    Wrote panorama.png (44000x2000)
 
 DESCRIPTION
 
@@ -109,14 +109,23 @@ zfar_color  = args.zfar_color  if args.zfar_color  is not None else args.zfar
 Ntiles = max(1, round((args.az_deg1 - args.az_deg0) / args.tile_deg))
 tile_edges = np.linspace(args.az_deg0, args.az_deg1, Ntiles+1)
 
-width_total = round((args.az_deg1 - args.az_deg0) * args.width_per_degree)
+# The offscreen render target is ONE tile, not the whole panorama: every
+# render() fills it entirely, so a target as wide as the panorama would
+# squeeze each tile's narrow wedge into the full panorama width. All the
+# tiles span the same azimuth (linspace above), so they all get the same
+# width, and render(az0,az1) maps az0/az1 to the outer edges of the first/
+# last pixels: adjacent tiles then line up with no gap or overlap. Rounding
+# tile_width makes the effective pixels/degree very slightly off from
+# --width-per-degree, but uniformly so across the whole panorama
+tile_width  = max(1, round((tile_edges[1] - tile_edges[0]) * args.width_per_degree))
+width_total = tile_width * Ntiles
 
 # One object, one DEM/land-cover load, one shader compile, for the whole
 # job: restrict_mesh_azimuth bounds each tile's mesh memory;
 # rebuild_mesh() (below) changes the wedge between tiles without ever
 # recreating the GL context
 h = horizonator.horizonator(args.lat, args.lon,
-                            width_total, args.height,
+                            tile_width, args.height,
                             SRTM1 = args.SRTM1,
                             render_radius_m = args.zfar,
                             restrict_mesh_azimuth = True,
@@ -143,6 +152,7 @@ for i in range(Ntiles):
     tile_images.append(image)
 
 panorama_bgr = np.concatenate(tile_images, axis = 1)
+assert panorama_bgr.shape[1] == width_total
 # horizonator returns BGR (see horizonator_render_offscreen() in
 # horizonator.h); flip to RGB for a standard PNG
 panorama_rgb = panorama_bgr[:, :, ::-1]
