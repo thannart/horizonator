@@ -48,7 +48,7 @@ int find_visible_pois(// output: room for Npois entries
                       const double max_marker_dist_m);
 
 bool annotate(// input
-              const char* out_filename, // must be .pdf or .svg
+              const char* out_filename, // .pdf, .svg or .png (no links in a .png)
               // assumed to be stored densely.
               const uint8_t* image_bgr,
               const float*   range_image,

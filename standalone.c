@@ -199,7 +199,7 @@ int main(int argc, char* argv[])
         "   [--materials]\n"
         "   [--no-restrict-mesh-azimuth]\n"
         "   [--no-ridge-lines] [--ridge-line-threshold METERS] [--ridge-line-gray FRACTION]\n"
-        "   [--label-font-size-pt POINTS]\n"
+        "   [--label-peaks] [--label-font-size-pt POINTS]\n"
         "   [--list-visible-peaks OUT.txt]\n"
         "   [--znear ZNEAR] [--zfar ZFAR] [--znear-color ZNEARCOLOR] [--zfar-color ZFARCOLOR]\n"
         "   [--dirdems DIRECTORY] [--dirlandcover DIRECTORY]\n"
@@ -221,11 +221,13 @@ int main(int argc, char* argv[])
         "the first and last pixels (slightly narrower than the viewport: one\n"
         "extra half-pixel on each side).\n"
         "\n"
-        "The image filename MUST be a .png file (the render alone is written)\n"
-        "OR a .pdf or .svg file (the render, annotated with named peaks and\n"
-        "bearing markers, is written -- see PEAK LABELS below). If annotating,\n"
-        "--cut-off-bottom-px N discards the bottom N pixels of the render; a\n"
-        "workaround for the uneven edges some renders have at the bottom.\n"
+        "The image filename MUST be a .png file (the render alone is written,\n"
+        "unless --label-peaks is given) OR a .pdf or .svg file (the render,\n"
+        "annotated with named peaks and bearing markers, is written -- see\n"
+        "PEAK LABELS below). With --label-peaks, a .png gets the same\n"
+        "annotations as a .pdf (but no clickable links), and can be at most\n"
+        "32767 pixels wide. --cut-off-bottom-px N discards the bottom N\n"
+        "pixels of the render, e.g. to crop away a featureless foreground.\n"
         "\n"
         "=== Field of view: what to render, and how much of it fills the frame ===\n"
         "\n"
@@ -340,7 +342,8 @@ int main(int argc, char* argv[])
         "name (e.g. \"1583.0\") -- filter those out downstream by checking\n"
         "for at least one letter, if wanted.\n"
         "\n"
-        "With a .pdf/.svg --image, visible peaks are labelled on the\n"
+        "With a .pdf/.svg --image, or a .png one with --label-peaks,\n"
+        "visible peaks are labelled on the\n"
         "render: a black name in vertical text (read by tilting your head\n"
         "to the left: first letter at the bottom, last letter at the top),\n"
         "connected to its peak by a thin almond-green leader line. Each\n"
@@ -353,7 +356,9 @@ int main(int argc, char* argv[])
         "gets a label, the others are dropped entirely (no line, no name).\n"
         "--label-font-size-pt sets the text height in real typographic\n"
         "points, i.e. as it will appear in the output PDF/SVG page (default\n"
-        "12); raise it for a legible render at a large --width, or when the\n"
+        "12), the page holding the render at 300 pixels per inch; a .png\n"
+        "gets the same size relative to the render (12pt = 50 pixels).\n"
+        "Raise it for a legible render at a large --width, or when the\n"
         "page will be viewed/printed at less than 100% zoom -- this also\n"
         "widens the conflict-detection gap, so fewer, larger labels survive.\n"
         "\n"
@@ -425,6 +430,7 @@ int main(int argc, char* argv[])
         { "ridge-line-threshold", required_argument, NULL, 'r' },
         { "ridge-line-gray",    required_argument, NULL, 'g' },
         { "label-font-size-pt", required_argument, NULL, 'F' },
+        { "label-peaks",        no_argument,       NULL, 'P' },
         { "list-visible-peaks", required_argument, NULL, 'L' },
         { "znear",             required_argument, NULL, '1' },
         { "zfar",              required_argument, NULL, '2' },
@@ -459,6 +465,7 @@ int main(int argc, char* argv[])
     float       ridge_line_threshold_m = 500.0f;
     float       ridge_line_gray      = 0.15f;
     float       label_font_size_pt   = 12.0f;
+    bool        label_peaks          = false;
 
     float znear       = HORIZONATOR_ZNEAR_DEFAULT;
     float zfar        = HORIZONATOR_ZFAR_DEFAULT;
@@ -630,6 +637,10 @@ int main(int argc, char* argv[])
 
         case 'L':
             filename_visible_peaks = optarg;
+            break;
+
+        case 'P':
+            label_peaks = true;
             break;
 
         case '?':
@@ -858,9 +869,11 @@ int main(int argc, char* argv[])
 
     if(filename_image != NULL)
     {
-        if(0 == strcasecmp(".png", &filename_image[strlen_filename_image-4]))
+        if(0 == strcasecmp(".png", &filename_image[strlen_filename_image-4]) &&
+           !label_peaks)
         {
-            // png file requested. I write out the render only
+            // png file requested, without --label-peaks. I write out the
+            // render only
             FreeImage_Initialise(true);
             FIBITMAP* fib = FreeImage_ConvertFromRawBitsEx(false,
                                                            (BYTE*)image,
@@ -882,17 +895,22 @@ int main(int argc, char* argv[])
         }
         else
         {
-            // pdf file is requested. I write an annotated pdf
-            annotate(filename_image,
-                     (uint8_t*)image, ranges, width, height, cut_off_bottom_px,
-                     pois, N_pois,
-                     lat, lon,
-                     az_center_deg-az_radius_deg,
-                     az_center_deg+az_radius_deg,
-                     viewer_z,
-                     curvature_enabled, refraction_k,
-                     zfar,
-                     label_font_size_pt);
+            // pdf/svg file, or png with --label-peaks: I write the render
+            // annotated with named peaks
+            if(!annotate(filename_image,
+                         (uint8_t*)image, ranges, width, height, cut_off_bottom_px,
+                         pois, N_pois,
+                         lat, lon,
+                         az_center_deg-az_radius_deg,
+                         az_center_deg+az_radius_deg,
+                         viewer_z,
+                         curvature_enabled, refraction_k,
+                         zfar,
+                         label_font_size_pt))
+            {
+                fprintf(stderr, "Couldn't write the annotated '%s'\n", filename_image);
+                return 1;
+            }
         }
     }
 
