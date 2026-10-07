@@ -48,7 +48,28 @@ in float atmo_t_fragment;
 
 const float SNOW_LINE_M   = 2800.0; // above this: snow, any slope
 const float TREE_LINE_M   = 1800.0; // below (and not snow/rock): forest
-const float SLOPE_ROCK_NZ = 0.77;   // normal.z under this: bare rock
+
+// Vegetation on a steep slope turns to bare rock progressively: fully its
+// own color below SLOPE_ROCK_DEG_START, fully COLOR_ROCK above
+// SLOPE_ROCK_DEG_END, smoothly blended in between (see rock_weight())
+const float SLOPE_ROCK_DEG_START = 35.0;
+const float SLOPE_ROCK_DEG_END   = 47.0;
+
+// Subtle variation of color inside each land-cover class (see
+// class_variation()): relative luminance amplitude per class
+const float VARIATION_VEGETATION = 0.07;
+const float VARIATION_ROCK       = 0.05;
+const float VARIATION_SNOW       = 0.02;
+
+// Snow in the shade is lit by the blue sky instead of the sun: its color
+// tends towards this as the slope turns away from the sun (multiplied by
+// the slope shading like everything else)
+const vec3 COLOR_SNOW_SHADOW = vec3(0.80, 0.87, 1.00);
+
+// For class_variation(): meters per degree of latitude, and the viewer's
+// cos(latitude) (set for vertex.glsl too) for the east-west scale
+const float M_PER_DEG = 111320.0;
+uniform float cos_viewer_lat;
 
 const vec3 COLOR_FOREST = vec3(0.35, 0.42, 0.30);
 const vec3 COLOR_GRASS  = vec3(0.55, 0.58, 0.38);
@@ -91,20 +112,82 @@ const vec3 COLOR_NEAR_DEFAULT = vec3(0.30, 0.30, 0.30);
 // materials are on
 const vec3 COLOR_FAR = vec3(0.80, 0.84, 0.92);
 
+// How much of a vegetation color turns to bare rock on a slope whose normal
+// has vertical component slope_nz (cos of the slope angle): 0 below
+// SLOPE_ROCK_DEG_START, 1 above SLOPE_ROCK_DEG_END. Progressive rather than
+// all-or-nothing: a hard threshold drew sharp green/gray boundaries
+// following the contour of the slope angle rather than of the vegetation,
+// and turned steep but grassy slopes entirely gray
+float rock_weight(float slope_nz)
+{
+    return 1.0 - smoothstep(cos(radians(SLOPE_ROCK_DEG_END)),
+                            cos(radians(SLOPE_ROCK_DEG_START)),
+                            slope_nz);
+}
+
+// Snow, bluish where it turns away from the sun (lit by the sky instead).
+// ndotl is the cosine between the surface normal and the sun direction;
+// with shading off, no slope faces away from the sun, so plain white
+vec3 snow_color(float ndotl)
+{
+    return mix(COLOR_SNOW, COLOR_SNOW_SHADOW, (1.0 - ndotl) * shading_scale);
+}
+
+// Hash-based value noise in [-1,1], smooth, unit feature size
+float hash12(vec2 p)
+{
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+float value_noise(vec2 p)
+{
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f*f*(3.0 - 2.0*f);
+    return mix(mix(hash12(i),               hash12(i + vec2(1.0, 0.0)), u.x),
+               mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x),
+               u.y) * 2.0 - 1.0;
+}
+
+// One octave of noise at feature size size_m, faded out where it would be
+// smaller than a pixel (it would only shimmer there, not read as texture)
+float noise_octave(vec2 ground_m, float size_m)
+{
+    vec2  p     = ground_m / size_m;
+    float fade  = 1.0 - smoothstep(0.3, 0.8, max(fwidth(p).x, fwidth(p).y));
+    return value_noise(p) * fade;
+}
+
+// Subtle, irregular variation for color c inside one land-cover class, so
+// a class isn't a flat, uniform patch: luminance by +-amplitude, plus a
+// slight warm/cool drift. A function of the position ON THE GROUND, so it's
+// stable from one render (or panorama tile) to the next
+vec3 class_variation(vec3 c, float amplitude, vec2 cell_ij)
+{
+    vec2 deg      = (cell_ij + landcover_origin_cell) / landcover_dem_cells_per_deg;
+    vec2 ground_m = deg * vec2(M_PER_DEG * cos_viewer_lat, M_PER_DEG);
+
+    float lum  = 0.6*noise_octave(ground_m, 600.0) + 0.4*noise_octave(ground_m, 150.0);
+    float tint = noise_octave(ground_m + vec2(5000.0), 900.0);
+
+    return c * (1.0 + amplitude*lum) +
+           vec3(0.5, 0.2, -0.5) * (amplitude*0.25*tint);
+}
+
 // Purely procedural fallback, used wherever no real land-cover data was
 // baked in for this point (landcover_class_at() == LANDCOVER_UNKNOWN):
 // no aerial imagery or land-cover data involved, just elevation (snow
 // line) and slope steepness (bare rock), with forest below the tree line
 // and alpine grass above it otherwise
-vec3 material_color_procedural(float elevation, float slope_nz)
+//
+// Same steep-slope rock and snow shading rules as material_color() below
+vec3 material_color_procedural(float elevation, float slope_nz, float ndotl)
 {
     if(elevation > SNOW_LINE_M)
-        return COLOR_SNOW;
-    if(slope_nz < SLOPE_ROCK_NZ)
-        return COLOR_ROCK;
-    if(elevation > TREE_LINE_M)
-        return COLOR_GRASS;
-    return COLOR_FOREST;
+        return snow_color(ndotl);
+    vec3 vegetation = elevation > TREE_LINE_M ? COLOR_GRASS : COLOR_FOREST;
+    return mix(vegetation, COLOR_ROCK, rock_weight(slope_nz));
 }
 
 // The LANDCOVER_* class at DEM cell coordinates cell_ij (fractional), or
@@ -182,23 +265,37 @@ float landcover_class_at(vec2 cell_ij)
 // on the horizontal footprint of neighboring vegetated terrain instead of
 // the cliff's actual rock. This shows up as green cliffs, and is far more
 // visible in a grazing panorama view than it would be looking straight
-// down at a map. So: same slope_nz<SLOPE_ROCK_NZ rule as the procedural
-// fallback below, applied here too, but only to the vegetation classes --
-// LANDCOVER_ROCK/SNOWICE/WATER stay as classified, since a steep slope is
-// unremarkable for bare rock and can be entirely legitimate for a couloir/
-// icefall or a cliff behind a lake
-vec3 material_color(float landcover_class, float elevation, float slope_nz)
+// down at a map. So: vegetation turns to rock on steep slopes (progressively,
+// see rock_weight()), same as in the procedural fallback above -- but only
+// the vegetation classes: LANDCOVER_ROCK/SNOWICE/WATER stay as classified,
+// since a steep slope is unremarkable for bare rock and can be entirely
+// legitimate for a couloir/icefall or a cliff behind a lake
+//
+// Every class then gets a subtle variation (class_variation()), so it
+// doesn't read as one flat patch of color
+vec3 material_color(float landcover_class, float elevation, float slope_nz,
+                    float ndotl, vec2 cell_ij)
 {
-    bool steep = slope_nz < SLOPE_ROCK_NZ;
-    if(landcover_class == LANDCOVER_FOREST)           return steep ? COLOR_ROCK : COLOR_FOREST;
-    if(landcover_class == LANDCOVER_GRASS)            return steep ? COLOR_ROCK : COLOR_GRASS;
-    if(landcover_class == LANDCOVER_ROCK)             return COLOR_ROCK;
-    if(landcover_class == LANDCOVER_SNOWICE)          return COLOR_SNOW;
-    if(landcover_class == LANDCOVER_WATER)            return COLOR_WATER;
-    if(landcover_class == LANDCOVER_FOREST_DECIDUOUS) return steep ? COLOR_ROCK : COLOR_FOREST_DECIDUOUS;
-    if(landcover_class == LANDCOVER_FOREST_CONIFER)   return steep ? COLOR_ROCK : COLOR_FOREST_CONIFER;
-    if(landcover_class == LANDCOVER_SHRUB)            return steep ? COLOR_ROCK : COLOR_SHRUB;
-    return material_color_procedural(elevation, slope_nz);
+    vec3  vegetation;
+    if     (landcover_class == LANDCOVER_FOREST)           vegetation = COLOR_FOREST;
+    else if(landcover_class == LANDCOVER_GRASS)            vegetation = COLOR_GRASS;
+    else if(landcover_class == LANDCOVER_FOREST_DECIDUOUS) vegetation = COLOR_FOREST_DECIDUOUS;
+    else if(landcover_class == LANDCOVER_FOREST_CONIFER)   vegetation = COLOR_FOREST_CONIFER;
+    else if(landcover_class == LANDCOVER_SHRUB)            vegetation = COLOR_SHRUB;
+    else if(landcover_class == LANDCOVER_ROCK)
+        return class_variation(COLOR_ROCK, VARIATION_ROCK, cell_ij);
+    else if(landcover_class == LANDCOVER_SNOWICE)
+        return class_variation(snow_color(ndotl), VARIATION_SNOW, cell_ij);
+    else if(landcover_class == LANDCOVER_WATER)
+        return COLOR_WATER;
+    else
+        return class_variation(material_color_procedural(elevation, slope_nz, ndotl),
+                               VARIATION_VEGETATION, cell_ij);
+
+    float rock_w = rock_weight(slope_nz);
+    return class_variation(mix(vegetation, COLOR_ROCK, rock_w),
+                           mix(VARIATION_VEGETATION, VARIATION_ROCK, rock_w),
+                           cell_ij);
 }
 
 void main(void)
@@ -221,7 +318,8 @@ void main(void)
     if(materials_scale > 0.0)
         near_color = mix(COLOR_NEAR_DEFAULT,
                          material_color(landcover_class_at(cell_ij_fragment),
-                                        elevation_fragment, n.z),
+                                        elevation_fragment, n.z,
+                                        ndotl, cell_ij_fragment),
                          materials_scale);
 
     // Atmospheric haze: blend towards the far color with distance. This
