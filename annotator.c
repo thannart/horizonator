@@ -328,10 +328,18 @@ bool annotate(// input
   // in the final PDF/SVG page (which is CAIRO_SCALE units per image
   // pixel). font_height is the corresponding size in the image's own
   // pixel-like coordinate system, which is what cairo_set_font_size()
-  // wants here, since we're drawing under a cairo_scale(CAIRO_SCALE)
+  // wants here, since we're drawing under a cairo_scale(CAIRO_SCALE).
+  // A .png is drawn in image pixels directly, with the same font_height:
+  // its labels are the same size relative to the render as in the PDF
+  // (i.e. points at PIXELS_PER_INCH)
   const double font_height = label_font_size_pt / CAIRO_SCALE;
 
   const int height_out = height - cut_off_bottom_px;
+
+  const int  strlen_out_filename = strlen(out_filename);
+  const bool output_png =
+    strlen_out_filename >= 4 &&
+    0 == strcasecmp(".png", &out_filename[strlen_out_filename-4]);
 
   visible_poi_t visible[Npois];
   int Nvisible = 0;
@@ -351,8 +359,22 @@ bool annotate(// input
                        width,
                        height));
 
-  const int strlen_out_filename = strlen(out_filename);
-  if(0 == strcasecmp(".pdf", &out_filename[strlen_out_filename-4]))
+  if(output_png)
+  {
+      // cairo's image surfaces can't be larger than this in either
+      // dimension
+      if(width > 32767 || height_out > 32767)
+      {
+          MSG("ERROR: an annotated .png can be at most 32767 pixels wide/high; got %dx%d. Use .pdf, or a smaller --width",
+              width, height_out);
+          goto done;
+      }
+      TRY(NULL !=
+          (surface = cairo_image_surface_create(CAIRO_FORMAT_RGB24,
+                                                width, height_out)));
+      TRY(CAIRO_STATUS_SUCCESS == cairo_surface_status(surface));
+  }
+  else if(0 == strcasecmp(".pdf", &out_filename[strlen_out_filename-4]))
       TRY(NULL !=
           (surface = cairo_pdf_surface_create(out_filename,
                                               width      * CAIRO_SCALE,
@@ -367,12 +389,14 @@ bool annotate(// input
   }
   else
   {
-      MSG("ERROR: output filename must be either xxx.pdf or xxx.svg; got '%s'", out_filename);
+      MSG("ERROR: output filename must be xxx.png, xxx.pdf or xxx.svg; got '%s'", out_filename);
       goto done;
   }
 
   TRY(NULL != (cr = cairo_create(surface)));
-  cairo_scale(cr, CAIRO_SCALE, CAIRO_SCALE);
+  // The PDF/SVG page is in points; the .png is in image pixels already
+  if(!output_png)
+      cairo_scale(cr, CAIRO_SCALE, CAIRO_SCALE);
 
   const double cos_lat = cos(lat * M_PI/180.);
 
@@ -397,7 +421,8 @@ bool annotate(// input
   // mupdf still works, but evince does not
   const int cell_width  = 14;
   const int cell_height = 14;
-  for(int y=0; y<height_out-cell_height; y += cell_height)
+  // A .png can't hold links: skip them entirely
+  for(int y=0; !output_png && y<height_out-cell_height; y += cell_height)
   {
     for(int x=0; x<width-cell_width; x += cell_width)
     {
@@ -528,7 +553,19 @@ bool annotate(// input
       cairo_show_text(cr, text);
   }
 
-  cairo_surface_show_page(surface);
+  if(output_png)
+  {
+      cairo_surface_flush(surface);
+      cairo_status_t status = cairo_surface_write_to_png(surface, out_filename);
+      if(status != CAIRO_STATUS_SUCCESS)
+      {
+          MSG("ERROR: couldn't write '%s': %s",
+              out_filename, cairo_status_to_string(status));
+          goto done;
+      }
+  }
+  else
+      cairo_surface_show_page(surface);
 
   result = true;
 
