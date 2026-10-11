@@ -1,0 +1,45 @@
+# Configuration of the peak labeling tools (label-peaks.py, labeling/).
+# Every tunable value lives here; the code has no magic numbers.
+
+[paths]
+# JSON list from: ./query-peaks-from-osm.py --json LAT LON RADIUS
+peaks_json      = "~/.horizonator/peaks/lyon-peaks.json"
+# Massif outlines: WGS84 lon/lat polygons
+massifs_geojson = "~/Massifs-Panorama.geojson"
+# Where the intermediate/debug outputs go (peaks_massifs.csv, ...)
+output_dir      = "~/.horizonator/labeling"
+
+[view]
+# The viewpoint and the azimuth window being labeled. Only used, in this
+# phase, to restrict the report to the peaks that matter for this view
+lat       = 45.77294
+lon       = 4.82993
+az_min    = 80.0
+az_max    = 160.0
+zfar_m    = 190000.0
+
+[peaks]
+# Peaks with no name in OSM (only an altitude) are never labeled
+require_name = true
+
+[massifs]
+# The massif name is in one of these GeoJSON properties, depending on the
+# source of the polygon (regional parks / national parks and "MASSIF"
+# zonings): the first non-empty one is used
+name_fields = ["DRGP_L_LIB", "nom_site"]
+# The massif given to a peak outside every polygon
+outside_name = "Hors liste"
+
+# Report of the peaks that fall outside every polygon although they are
+# probably part of a massif whose polygon is only a national-park
+# perimeter (narrower than the massif in common usage)
+[massifs.narrow_perimeter_report]
+# GeoJSON property and values identifying such perimeters
+type_field  = "type_protection"
+type_values = ["PNN"]
+# Only peaks at least this high...
+min_ele_m   = 2500.0
+# ...and at most this far from such a perimeter
+max_dist_km = 15.0
+# Console report length (the full list goes to massif_suspects.csv)
+max_lines   = 25
