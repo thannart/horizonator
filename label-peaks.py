@@ -28,6 +28,10 @@ by phase, each one a subcommand:
   select    choose the labels and their rows (labeling/selection.py:
             integer program with PuLP/CBC, greedy fallback); writes
             labels_selected.csv and a debug preview labels_preview.png
+  draw      draw the labels (labeling/draw.py): an SVG overlay with the
+            same size and projection as the PNG, and the PNG composite
+            (render + labels). Re-renders taller if the labels need more
+            sky
 
 The peak list comes from query-peaks-from-osm.py --json, the massif outlines
 from a GeoJSON file; all paths and parameters are in labeling/labeling.toml
@@ -44,6 +48,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from labeling import config, geometry, massifs as massifs_mod, peaks as peaks_mod
 from labeling import render as render_mod, scoring, text, planes as planes_mod, selection
+from labeling import draw as draw_mod
 
 
 def parse_args():
@@ -51,7 +56,7 @@ def parse_args():
                                      formatter_class = argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--config', default = None,
                         help = 'Configuration file (default: labeling/labeling.toml)')
-    parser.add_argument('phase', choices = ('massifs', 'scores', 'plans', 'select'))
+    parser.add_argument('phase', choices = ('massifs', 'scores', 'plans', 'select', 'draw'))
     return parser.parse_args()
 
 
@@ -327,11 +332,63 @@ def phase_select(cfg):
     write_scored(scored, cfg)
 
 
+def layout_and_select(cfg):
+    pano, scored = compute_scores(cfg)
+    metrics = text.Metrics(cfg)
+    planes  = planes_mod.group(scored, cfg)
+    lay     = planes_mod.layout(planes, scored, pano, metrics, cfg)
+    chosen, info = selection.select(scored, lay, cfg)
+    return pano, scored, metrics, planes, lay, chosen, info
+
+
+def phase_draw(cfg):
+    pano, scored, metrics, planes, lay, chosen, info = layout_and_select(cfg)
+
+    # Not enough sky above the skyline for the label rows: render taller.
+    # The horizon is the middle row, so the height grows by twice the
+    # missing sky; the scores don't change (same angular resolution)
+    missing = cfg['draw']['top_margin_px'] - min(p.top for p in chosen)
+    if missing > 0 and cfg['draw']['auto_sky']:
+        cfg['render']['height_px'] += 2 * int(math.ceil(missing))
+        print(f'\nThe labels need {missing:.0f} more px of sky: re-rendering '
+              f'{cfg["render"]["height_px"]} px high')
+        pano, scored, metrics, planes, lay, chosen, info = layout_and_select(cfg)
+
+    out = cfg['paths']['output_dir']
+    svg = os.path.join(out, cfg['draw']['svg_name'])
+    png = os.path.join(out, cfg['draw']['png_name'])
+    res = draw_mod.write(pano, chosen, lay, planes, metrics, cfg, svg, png)
+
+    print(f'\n{len(chosen)} labels drawn; {info["status"]}')
+    print(f'Image {res["width"]}x{res["height"]} px (render window x {res["x0"]}, y {res["y0"]})')
+    print('Massif colors (DSatur, neighbors in azimuth must differ):')
+    for m, c in sorted(res['colors'].items(), key = lambda t: t[0]):
+        n = sum(1 for p in chosen if p.q['massif'] == m)
+        if n:
+            print(f'  {m:30s} #{"".join(f"{int(round(v*255)):02X}" for v in c)}  {n:3d} labels'
+                  f'  neighbors: {", ".join(sorted(res["neighbors"].get(m, ()))) or "-"}')
+    err = draw_mod.alignment_errors(chosen, pano, cfg)
+    worst = sorted(err, key = lambda t: -t[1])
+    tol = cfg['validation']['alignment_tol_px']
+    bad = [(n, e) for n, e in worst if e > tol]
+    print(f'Alignment (leader line foot -> the peak\'s own rendered terrain): '
+          f'{len(err) - len(bad)}/{len(err)} labels within {tol:g} px' +
+          ('; above: ' + ', '.join(f'{n} ({"masked at its column" if e == math.inf else f"{e:.0f} px"})'
+                                   for n, e in bad) if bad else ''))
+    print('\nValidation peaks:')
+    on = {p.q['name'] for p in chosen}
+    for name in cfg['validation']['peaks']:
+        q = next((q for q in scored if q['name'] == name), None)
+        if q is not None:
+            print(f'  {name:28s} {"labeled" if name in on else "not labeled: " + (q["reason"] or "no room")}')
+    print(f'\nWrote {svg}\nWrote {png}')
+
+
 def main():
     args = parse_args()
     cfg  = config.load(args.config)
     {'massifs': phase_massifs, 'scores': phase_scores, 'plans': phase_plans,
-     'select': phase_select}[args.phase](cfg)
+     'select': phase_select, 'draw': phase_draw}[args.phase](cfg)
 
 
 if __name__ == '__main__':

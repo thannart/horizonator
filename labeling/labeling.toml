@@ -125,6 +125,9 @@ max_lines   = 25
 # What label-peaks.py prints to check its results against known peaks
 [validation]
 top_n = 40
+# Maximum distance (px) between a label's leader line foot and its peak's
+# own rendered terrain
+alignment_tol_px = 3.0
 peaks = ["Mont Blanc / Monte Bianco", "Grand Pic de la Meije", "Barre des Écrins",
          "Mont Aiguille", "Le Grand Som", "Chamechaude", "Dent de Crolles",
          "Grand Veymont", "Grande Tête de l'Obiou", "Le Taillefer"]
@@ -172,7 +175,11 @@ margin_px       = 4
 # PuLP isn't installed)
 solver               = "pulp"
 time_limit_s         = 120
-# Objective bonus for a label in its massif's main row
+# Each label is worth score^score_exponent in the objective: above 1, one
+# major peak outweighs several minor neighbors (with 1, two 0.30 peaks beat
+# a 0.42 one, e.g. the Meije)
+score_exponent       = 2.0
+# Relative objective bonus (x (1 + bonus)) for a label in its massif's main row
 main_row_bonus       = 0.05
 # Penalty for a visible massif left without any label (soft constraint)
 massif_min_penalty   = 10.0
@@ -183,3 +190,62 @@ box_gap_px           = 2
 # A label's row must be at least this far (px) above its peak (room for
 # the leader line)
 min_leader_px        = 10
+
+# Phase 5: drawing
+[draw]
+# Final image: the view window only (the scoring margins are cropped off),
+# from the top of the canvas down to this far below the horizon
+keep_below_horizon_deg = 0.25
+# Extra sky (px) above the highest label
+top_margin_px          = 20
+# If the render doesn't have enough sky above the skyline for the label
+# rows, it's re-rendered taller (the scores don't change: same px/deg)
+auto_sky               = true
+leader_width_px        = 1.2
+# Vertical padding (px) inside a label box, at each end of the text
+text_pad_px            = 4
+# Massif name: once per massif, on a bar spanning its labels, just below
+# the lowest row of its plane's band
+massif_name_size_px    = 15
+massif_bar_width_px    = 3
+massif_bar_offset_px   = 6
+# Colors: graph coloring (DSatur) of the massifs, two massifs being
+# neighbors if their label spans are closer than this in azimuth (which
+# includes massifs of different planes overlapping in azimuth)
+adjacency_gap_deg      = 1.5
+# Okabe-Ito palette (colorblind-safe), without black
+palette = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"]
+outside_color          = "#999999"
+# Output files (in [paths] output_dir)
+svg_name               = "labels_overlay.svg"
+png_name               = "labels_composite.png"
+
+# 3-letter massif abbreviations, for [labels] show_massif_abbrev
+[massifs.abbrev]
+"Vercors" = "VER"
+"Queyras" = "QUE"
+"Chartreuse" = "CHA"
+"Massif Des Bauges" = "BAU"
+"Mont Ventoux" = "VEN"
+"Parc national des Ecrins" = "ECR"
+"Parc national du Mercantour" = "MER"
+"Parc national de la Vanoise" = "VAN"
+"Préalpes de Digne" = "DIG"
+"Parpaillon" = "PAR"
+"Baronnies" = "BAR"
+"Cerces" = "CER"
+"Devoluy" = "DEV"
+"Arves" = "ARV"
+"Préalpes de Nice" = "NIC"
+"Diois" = "DIO"
+"Belledonne" = "BEL"
+"Grandes Rousses" = "GRO"
+"Taillefer" = "TAI"
+"Beaufortain" = "BEA"
+"Lauzière" = "LAU"
+"Aravis" = "ARA"
+"Chablais" = "CHB"
+"Haute-Giffre" = "GIF"
+"Bornes" = "BOR"
+"Mont-Blanc" = "MBL"
+"Hors liste" = "HL"

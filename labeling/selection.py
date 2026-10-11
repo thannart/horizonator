@@ -73,8 +73,12 @@ def conflict_pairs(P):
 
 
 def _objective_weight(p, lay, cfg):
-    bonus = cfg['selection']['main_row_bonus'] if lay['main_row'].get(p.q['massif']) == p.row else 0.0
-    return p.q['score'] + bonus
+    # The main-row bonus is relative (a tie-breaker): as an absolute amount
+    # it outweighed whole peaks once scores are raised to a power (2 x 0.05
+    # of bonus kept two minor labels against the Meije)
+    sel   = cfg['selection']
+    bonus = sel['main_row_bonus'] if lay['main_row'].get(p.q['massif']) == p.row else 0.0
+    return p.q['score'] ** sel['score_exponent'] * (1.0 + bonus)
 
 
 def solve_pulp(P, pairs, lay, cfg):
