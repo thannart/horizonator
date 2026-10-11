@@ -131,8 +131,11 @@ def phase_scores(cfg):
     visible = [q for q in scored if not q['hidden']]
     kept    = [q for q in scored if q['score'] > 0]
     print(f'{len(scored)} named peaks in the view: {len(visible)} visible, '
-          f'{len(scored) - len(visible)} hidden; {len(kept)} with a nonzero score '
-          f'(prominence >= {s["prom_min_px"]:g} px)')
+          f'{len(scored) - len(visible)} hidden; {len(kept)} with a nonzero score')
+    reasons = collections.Counter(q['reason'] for q in scored if q['reason'])
+    print('  no score because: ' + ', '.join(f'{r} {n}' for r, n in reasons.most_common()) +
+          f'  (too_close: < {s["min_label_distance_m"]/1000:g} km; '
+          f'low_prominence: < {s["prom_min_deg"]:g} deg)')
     print(f'Wikidata: {sum(1 for q in kept if q["wikidata"])} of them have an item, '
           f'max sitelinks {max((q["sitelinks"] for q in kept), default = 0)}')
 
@@ -148,10 +151,11 @@ def phase_scores(cfg):
 
     kept.sort(key = lambda q: -q['score'])
     print(f'\nTop {cfg["validation"]["top_n"]} scores:')
-    print(f'  {"":3s} {"name":34s} {"massif":24s} {"ele":>5s} {"km":>4s} {"prom":>5s} {"clear":>5s} {"links":>5s} {"score":>5s}')
+    print(f'  {"":3s} {"name":34s} {"massif":24s} {"ele":>5s} {"km":>4s} '
+          f'{"prom°":>6s} {"clear°":>6s} {"links":>5s} {"score":>5s}')
     for i, q in enumerate(kept[:cfg['validation']['top_n']]):
         print(f'  {i+1:3d} {q["name"][:34]:34s} {q["massif"][:24]:24s} {q["ele"]:5.0f} '
-              f'{q["distance_m"]/1000:4.0f} {q["prom_px"]:5.0f} {q["clearance_px"]:5.0f} '
+              f'{q["distance_m"]/1000:4.0f} {q["prom_deg"]:6.3f} {q["clearance_deg"]:6.3f} '
               f'{q["sitelinks"]:5d} {q["score"]:5.3f}')
 
     print('\nValidation peaks:')
@@ -159,8 +163,9 @@ def phase_scores(cfg):
     for name in cfg['validation']['peaks']:
         for q in (q for q in scored if q['name'] == name):
             print(f'  {name:28s} {q["massif"][:22]:22s} rank {rank.get(id(q), "-"):>4} '
-                  f'score {q["score"]:.3f}  prom {q["prom_px"]:6.1f} px  clear {q["clearance_px"]:6.1f} px  '
-                  f'{"HIDDEN" if q["hidden"] else "visible"}  dx {q["dx_px"]:+.1f} dy {q["dy_px"]:+.1f} px')
+                  f'score {q["score"]:.3f}  prom {q["prom_deg"]:.3f} deg  clear {q["clearance_deg"]:+.3f} deg  '
+                  f'{q["reason"] or "labeled"}{" (" + q["duplicate_of"] + ")" if q["duplicate_of"] else ""}  '
+                  f'dx {q["dx_px"]:+.1f} dy {q["dy_px"]:+.1f} px')
         if not any(q['name'] == name for q in scored):
             print(f'  {name:28s} (not in the view window)')
 
