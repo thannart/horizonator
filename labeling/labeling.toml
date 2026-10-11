@@ -77,7 +77,7 @@ dedup_deg         = 0.01
 prom_window_deg   = 3.0
 # All the angular thresholds are in degrees, so the scores don't depend on
 # the render's resolution. Below this angular prominence: score 0
-prom_min_deg      = 0.03
+prom_min_deg      = 0.024
 # Normalization scales (degrees) and weights of the score
 prom_full_deg     = 0.3
 clear_full_deg    = 0.15
@@ -128,3 +128,37 @@ top_n = 40
 peaks = ["Mont Blanc / Monte Bianco", "Grand Pic de la Meije", "Barre des Écrins",
          "Mont Aiguille", "Le Grand Som", "Chamechaude", "Dent de Crolles",
          "Grand Veymont", "Grande Tête de l'Obiou", "Le Taillefer"]
+
+# Phase 3: depth planes and label rows
+[plans]
+# Number of depth planes the massifs are grouped into (cut at the largest
+# gaps between the median distances of their labelable peaks)
+count          = 4
+# "near_low": the nearest plane gets the lowest band of rows (just above
+# the skyline), the farthest the highest; "far_low": the reverse
+band_order     = "near_low"
+# Rows per band: a massif's labels share one row as much as possible; the
+# others are used only on collisions
+rows_per_band  = 2
+# Vertical gap (px) between the highest rendered terrain of the view and
+# the bottom of the lowest row
+skyline_gap_px = 40
+# Vertical distance (px) between the bottoms of two consecutive rows. The
+# label text is vertical and grows UP from its row: this is set from the
+# label lengths (see the phase 3 report)
+row_spacing_px = 0
+# If row_spacing_px is 0: use this percentile of the label lengths
+row_spacing_percentile = 90
+
+# Label text (phase 3 measures it; phase 5 draws it). Sizes in final
+# image pixels
+[labels]
+font_family     = "DejaVu Sans"
+name_size_px    = 22
+alt_size_px     = 16
+# Line advance, as a multiple of each line's font size
+line_spacing    = 1.25
+# Optional third line: 3-letter massif abbreviation
+show_massif_abbrev = false
+# Horizontal margin (px) added on each side of a label's footprint
+margin_px       = 4

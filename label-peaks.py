@@ -22,6 +22,9 @@ by phase, each one a subcommand:
             render's own distance map (rendered in tiles, then cached);
             fetches Wikidata sitelinks once (cached). Writes
             peaks_scored.csv
+  plans     group the massifs into depth planes, and lay out the bands of
+            label rows above the skyline (labeling/planes.py); fills the
+            plan column of peaks_scored.csv
 
 The peak list comes from query-peaks-from-osm.py --json, the massif outlines
 from a GeoJSON file; all paths and parameters are in labeling/labeling.toml
@@ -36,7 +39,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from labeling import config, geometry, massifs as massifs_mod, peaks as peaks_mod
-from labeling import render as render_mod, scoring
+from labeling import render as render_mod, scoring, text, planes as planes_mod
 
 
 def parse_args():
@@ -44,7 +47,7 @@ def parse_args():
                                      formatter_class = argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--config', default = None,
                         help = 'Configuration file (default: labeling/labeling.toml)')
-    parser.add_argument('phase', choices = ('massifs', 'scores'))
+    parser.add_argument('phase', choices = ('massifs', 'scores', 'plans'))
     return parser.parse_args()
 
 
@@ -115,7 +118,8 @@ def fmt(v):
     return v
 
 
-def phase_scores(cfg):
+def compute_scores(cfg):
+    '''Phases 1+2: the render and the scored peaks of the view'''
     peaks   = peaks_mod.load(cfg)
     massifs = massifs_mod.load(cfg)
     massifs_mod.assign(peaks, massifs, cfg)
@@ -125,8 +129,21 @@ def phase_scores(cfg):
     print(f'  {pano.width}x{pano.height} px, {1/pano.deg_per_px:g} px/deg, '
           f'az {pano.az_lo:.2f}-{pano.az_from_x(pano.width-0.5):.2f}, '
           f'viewer_z {pano.viewer_z:.1f} m')
+    return pano, scoring.score_peaks(peaks, pano, cfg)
 
-    scored  = scoring.score_peaks(peaks, pano, cfg)
+
+def write_scored(scored, cfg):
+    out = os.path.join(cfg['paths']['output_dir'], 'peaks_scored.csv')
+    with open(out, 'w', newline = '') as f:
+        w = csv.writer(f)
+        w.writerow(scoring.CSV_FIELDS)
+        for q in sorted(scored, key = lambda q: -q['score']):
+            w.writerow([fmt(q.get(k, '')) for k in scoring.CSV_FIELDS])
+    print(f'\nWrote {out}')
+
+
+def phase_scores(cfg):
+    pano, scored = compute_scores(cfg)
     s       = cfg['score']
     visible = [q for q in scored if not q['hidden']]
     kept    = [q for q in scored if q['score'] > 0]
@@ -169,19 +186,50 @@ def phase_scores(cfg):
         if not any(q['name'] == name for q in scored):
             print(f'  {name:28s} (not in the view window)')
 
-    out = os.path.join(cfg['paths']['output_dir'], 'peaks_scored.csv')
-    with open(out, 'w', newline = '') as f:
-        w = csv.writer(f)
-        w.writerow(scoring.CSV_FIELDS)
-        for q in sorted(scored, key = lambda q: -q['score']):
-            w.writerow([fmt(q.get(k, '')) for k in scoring.CSV_FIELDS])
-    print(f'\nWrote {out}')
+    write_scored(scored, cfg)
+
+
+def phase_plans(cfg):
+    pano, scored = compute_scores(cfg)
+    planes = planes_mod.group(scored, cfg)
+    lay    = planes_mod.layout(planes, scored, pano, text.Metrics(cfg), cfg)
+    labelable = [q for q in scored if q['score'] > 0]
+    outside   = cfg['massifs']['outside_name']
+
+    print(f'\n{len(labelable)} labelable peaks, {len(planes)} depth planes '
+          f'(cut at the {len(planes)-1} largest gaps between massif median distances):')
+    for p in planes:
+        qs = [q for q in labelable if q['plan'] == p['index']]
+        print(f'\n  Plane {p["index"]+1}: massif medians {p["d_min"]/1000:.0f}-{p["d_max"]/1000:.0f} km, '
+              f'{len(qs)} labelable peaks, rows {lay["band_rows"][p["index"]]}')
+        for m in p['massifs']:
+            mq = sorted((q for q in qs if q['massif'] == m), key = lambda q: -q['score'])
+            print(f'    {m:30s} median {p["medians"][m]/1000:5.1f} km  {len(mq):3d} peaks  '
+                  f'main row {lay["main_row"][m]}  e.g. ' +
+                  ', '.join(q['name'] for q in mq[:3]))
+        hl = sorted((q for q in qs if q['massif'] == outside), key = lambda q: -q['score'])
+        if hl:
+            print(f'    {outside:30s} {len(hl):3d} peaks placed here by distance, e.g. ' +
+                  ', '.join(f'{q["name"]} ({q["distance_m"]/1000:.0f} km)' for q in hl[:4]))
+
+    print(f'\nRows (y of the label bottoms, lowest first): ' +
+          ', '.join(f'{y:.0f}' for y in lay['rows']) +
+          f'; spacing {lay["spacing"]:.0f} px; highest terrain of the view at y={lay["skyline_y"]}')
+    lengths = sorted(q['label_length'] for q in labelable)
+    print(f'Label lengths: median {lengths[len(lengths)//2]:.0f} px, max {lengths[-1]:.0f} px '
+          f'({cfg["labels"]["name_size_px"]} px names); thickness ~{labelable[0]["label_thickness"]:.0f} px')
+    if lay['sky_needed_px'] > 0:
+        print(f'The current render has {lay["sky_needed_px"]:.0f} px too little sky above the rows: '
+              f'[render] height_px should be >= {cfg["render"]["height_px"] + 2*int(lay["sky_needed_px"]+0.5)} '
+              f'(the horizon is the middle row; the extra bottom is cut off in phase 5)')
+
+    write_scored(scored, cfg)
 
 
 def main():
     args = parse_args()
     cfg  = config.load(args.config)
-    {'massifs': phase_massifs, 'scores': phase_scores}[args.phase](cfg)
+    {'massifs': phase_massifs, 'scores': phase_scores, 'plans': phase_plans}[args.phase](cfg)
 
 
 if __name__ == '__main__':
