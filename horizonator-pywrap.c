@@ -44,6 +44,10 @@ do {                                                                    \
 typedef struct {
     PyObject_HEAD
     horizonator_context_t ctx;
+    // The viewer's eye elevation (m above sea level) actually used: the DEM
+    // ground at the viewer plus viewer_height_m. Exposed read-only, so
+    // labels can be placed with exactly the render's own viewpoint
+    float viewer_z;
 } py_horizonator_t;
 
 static int
@@ -68,6 +72,7 @@ py_horizonator_init(py_horizonator_t* self, PyObject* args, PyObject* kwargs)
     double render_radius_m  = -1.;
     int restrict_mesh_azimuth = false;
     double mesh_az_deg0 = 0., mesh_az_deg1 = 0.;
+    double viewer_height_m = 0.;
 
     char* keywords[] = {
         "lat", "lon",
@@ -81,6 +86,7 @@ py_horizonator_init(py_horizonator_t* self, PyObject* args, PyObject* kwargs)
         "render_radius_m",
         "restrict_mesh_azimuth",
         "mesh_az_deg0", "mesh_az_deg1",
+        "viewer_height_m",
         NULL};
 
     if(self->ctx.offscreen.inited)
@@ -90,7 +96,7 @@ py_horizonator_init(py_horizonator_t* self, PyObject* args, PyObject* kwargs)
     }
 
     if( !PyArg_ParseTupleAndKeywords(args, kwargs,
-                                     "ddII|ppssssspidpdd", keywords,
+                                     "ddII|ppssssspidpddd", keywords,
                                      &lat, &lon, &width, &height,
                                      &render_texture, &SRTM1,
                                      &dir_dems, &dir_landcover, &dir_tiles,
@@ -99,8 +105,13 @@ py_horizonator_init(py_horizonator_t* self, PyObject* args, PyObject* kwargs)
                                      &render_radius_cells,
                                      &render_radius_m,
                                      &restrict_mesh_azimuth,
-                                     &mesh_az_deg0, &mesh_az_deg1))
+                                     &mesh_az_deg0, &mesh_az_deg1,
+                                     &viewer_height_m))
         goto done;
+
+    // < 0: horizonator_init() auto-selects it (DEM ground at the viewer),
+    // and reports it back here
+    self->viewer_z = -1.0f;
 
     if(render_radius_cells<0 && render_radius_m<0)
         render_radius_cells = render_radius_cells_default;
@@ -113,7 +124,7 @@ py_horizonator_init(py_horizonator_t* self, PyObject* args, PyObject* kwargs)
 
     if(! horizonator_init( &self->ctx,
                            lat, lon,
-                           NULL,
+                           &self->viewer_z,
                            width, height,
                            render_radius_cells, render_radius_m,
                            // By default: no mesh azimuth restriction, so
@@ -132,6 +143,18 @@ py_horizonator_init(py_horizonator_t* self, PyObject* args, PyObject* kwargs)
                            tiles_url_fmt,
                            allow_downloads ) )
         goto done;
+
+    if(viewer_height_m != 0.)
+    {
+        // Same as standalone's --viewer-height: the observer stands this
+        // high above the auto-selected ground elevation
+        self->viewer_z += (float)viewer_height_m;
+        if(!horizonator_move(&self->ctx, &self->viewer_z, lat, lon))
+        {
+            BARF("horizonator_move() failed");
+            goto done;
+        }
+    }
 
     result = 0;
 
@@ -434,6 +457,20 @@ static PyMethodDef py_horizonator_methods[] =
     };
 
 
+static PyObject* get_viewer_z(py_horizonator_t* self, void* closure __attribute__((unused)))
+{
+    return PyFloat_FromDouble((double)self->viewer_z);
+}
+
+static PyGetSetDef py_horizonator_getset[] =
+    {
+        {"viewer_z", (getter)get_viewer_z, NULL,
+         "The viewer's eye elevation (m above sea level) used by the render: the DEM\n"
+         "ground at the viewer, plus viewer_height_m",
+         NULL},
+        {}
+    };
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-braces"
 // PyObject_HEAD_INIT throws
@@ -448,6 +485,7 @@ static PyTypeObject horizonator_type =
     .tp_init      = (initproc)py_horizonator_init,
     .tp_dealloc   = (destructor)py_horizonator_dealloc,
     .tp_methods   = py_horizonator_methods,
+    .tp_getset    = py_horizonator_getset,
     .tp_str       = (reprfunc)py_horizonator_str,
     .tp_flags     = Py_TPFLAGS_DEFAULT,
     .tp_doc       = py_horizonator_docstring,

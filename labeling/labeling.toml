@@ -22,6 +22,66 @@ zfar_m    = 190000.0
 # Peaks with no name in OSM (only an altitude) are never labeled
 require_name = true
 
+# The render the labels are computed on (and later drawn over). Rendered in
+# azimuth tiles through the Python bindings, and cached
+[render]
+SRTM1           = true
+dir_landcover   = "~/.horizonator/landcover-srtm1"
+# Angular resolution of the final image, the same horizontally and
+# vertically (the renderer's projection)
+px_per_deg      = 200.0
+# Full image height, before any bottom cut; the horizon is its middle row
+height_px       = 800
+# Width of each render tile (the offscreen buffer); the panorama is split
+# into equal tiles of at most this width
+max_tile_px     = 4800
+curvature       = true
+refraction_k    = 0.13
+viewer_height_m = 0.0
+# Look (only matters for the image, not for the scores)
+materials       = true
+shading         = true
+sun_azimuth     = 215.0
+sun_elevation   = 47.5
+znear_m         = 100.0
+
+[score]
+# Extra azimuth rendered on each side of the view, so the prominence
+# search window of a peak near the edge is complete
+margin_deg        = 3.0
+# Peaks closer than this are never labeled
+min_distance_m    = 500.0
+# Re-centering: the rendered summit is searched within this many degrees
+# of the OSM position (OSM points can be off the DEM summit)
+recal_deg         = 0.05
+# Terrain up to this far BEHIND the peak still counts in its profile S
+delta_behind_m    = 4000.0
+# Terrain at least this far IN FRONT of the peak forms its masking horizon
+delta_front_m     = 1000.0
+# A peak whose clearance is below -hidden_tol_px is hidden (score 0);
+# absorbs DEM/OSM elevation differences
+hidden_tol_px     = 2.0
+# Prominence: search window on each side of the peak
+prom_window_deg   = 3.0
+# Below this angular prominence (in final image pixels): score 0
+prom_min_px       = 6.0
+# Normalization scales and weights of the score
+prom_full_px      = 60.0
+clear_full_px     = 30.0
+w_prominence      = 0.55
+w_notoriety       = 0.30
+w_clearance       = 0.15
+# Optional atmospheric attenuation: score *= exp(-d / L)
+attenuation       = false
+attenuation_L_m   = 175000.0
+
+[wikidata]
+api           = "https://www.wikidata.org/w/api.php"
+user_agent    = "horizonator label-peaks.py (peak labeling)"
+batch_size    = 50
+timeout_s     = 60
+cache_json    = "wikidata_sitelinks.json"
+
 [massifs]
 # The massif name is in one of these GeoJSON properties, depending on the
 # source of the polygon (regional parks / national parks and "MASSIF"
@@ -29,6 +89,11 @@ require_name = true
 name_fields = ["DRGP_L_LIB", "nom_site"]
 # The massif given to a peak outside every polygon
 outside_name = "Hors liste"
+# A peak outside every polygon but at most this far from one is attributed
+# to the nearest one: the "MASSIF" polygons are unions of communes, whose
+# boundaries often follow the ridges, so summits land right on (or a few
+# meters outside) the outline (e.g. Grande Tête de l'Obiou / Dévoluy)
+snap_tolerance_km = 1.0
 
 # Report of the peaks that fall outside every polygon although they are
 # probably part of a massif whose polygon is only a national-park
@@ -43,3 +108,10 @@ min_ele_m   = 2500.0
 max_dist_km = 15.0
 # Console report length (the full list goes to massif_suspects.csv)
 max_lines   = 25
+
+# What label-peaks.py prints to check its results against known peaks
+[validation]
+top_n = 40
+peaks = ["Mont Blanc / Monte Bianco", "Grand Pic de la Meije", "Barre des Écrins",
+         "Mont Aiguille", "Le Grand Som", "Chamechaude", "Dent de Crolles",
+         "Grand Veymont", "Grande Tête de l'Obiou", "Le Taillefer"]

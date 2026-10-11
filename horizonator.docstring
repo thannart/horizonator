@@ -87,3 +87,10 @@ The __init__() function takes
 
 - mesh_az_deg0, mesh_az_deg1: the initial azimuth wedge to mesh, in
   degrees. Ignored unless restrict_mesh_azimuth
+
+- viewer_height_m: optional float, defaulting to 0. The viewer's eye stands
+  this many meters above the DEM ground at (lat,lon), like standalone's
+  --viewer-height
+
+The eye elevation actually used (m above sea level) is available afterwards
+as the read-only attribute viewer_z

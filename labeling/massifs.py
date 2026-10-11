@@ -42,15 +42,30 @@ def load(cfg):
 def assign(peaks, massifs, cfg):
     '''Sets peak['massif'] for every peak: the polygon containing it (its
     boundary included); if several do, the smallest one (the most
-    specific); if none, [massifs] outside_name. Also sets
-    peak['massif_candidates'], the number of polygons containing it'''
+    specific); if none, the nearest polygon within [massifs]
+    snap_tolerance_km; else [massifs] outside_name. Also sets
+    peak['massif_candidates'] (number of polygons containing it) and
+    peak['massif_snap_km'] (distance to the polygon it was snapped to, or
+    empty if it wasn't)'''
     tree = shapely.STRtree([m.polygon for m in massifs])
+    lat0 = shapely.union_all([m.polygon for m in massifs]).centroid.y
+    tol  = cfg['massifs']['snap_tolerance_km']
     for p in peaks:
         pt  = Point(p['lon'], p['lat'])
         hit = [massifs[i] for i in tree.query(pt, predicate = 'covered_by')]
         p['massif_candidates'] = len(hit)
-        p['massif'] = (min(hit, key = lambda m: m.area_km2).name if hit
-                       else cfg['massifs']['outside_name'])
+        p['massif_snap_km']    = ''
+        if hit:
+            p['massif'] = min(hit, key = lambda m: m.area_km2).name
+            continue
+        pt_km = Point(geometry.local_km(p['lon'], p['lat'], lat0))
+        d, m  = min(((m.polygon_km.distance(pt_km), m) for m in massifs),
+                    key = lambda t: t[0])
+        if d <= tol:
+            p['massif']         = m.name
+            p['massif_snap_km'] = round(d, 3)
+        else:
+            p['massif'] = cfg['massifs']['outside_name']
 
 
 def narrow_perimeter_suspects(peaks, massifs, cfg):

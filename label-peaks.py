@@ -5,8 +5,12 @@ r'''Peak labeling for horizonator renders
 SYNOPSIS
 
   $ ./label-peaks.py massifs
-  12034 named peaks; ...
+  6765 named peaks, 26 massif polygons; ...
   Wrote ~/.horizonator/labeling/peaks_massifs.csv
+
+  $ ./label-peaks.py scores
+  ...
+  Wrote ~/.horizonator/labeling/peaks_scored.csv
 
 DESCRIPTION
 
@@ -14,6 +18,10 @@ Selects which peaks to name on a render, and draws the labels. Works phase
 by phase, each one a subcommand:
 
   massifs   attribute every peak to a massif (labeling/massifs.py)
+  scores    score every peak of the view (labeling/scoring.py) from the
+            render's own distance map (rendered in tiles, then cached);
+            fetches Wikidata sitelinks once (cached). Writes
+            peaks_scored.csv
 
 The peak list comes from query-peaks-from-osm.py --json, the massif outlines
 from a GeoJSON file; all paths and parameters are in labeling/labeling.toml
@@ -28,6 +36,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from labeling import config, geometry, massifs as massifs_mod, peaks as peaks_mod
+from labeling import render as render_mod, scoring
 
 
 def parse_args():
@@ -35,7 +44,7 @@ def parse_args():
                                      formatter_class = argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--config', default = None,
                         help = 'Configuration file (default: labeling/labeling.toml)')
-    parser.add_argument('phase', choices = ('massifs',))
+    parser.add_argument('phase', choices = ('massifs', 'scores'))
     return parser.parse_args()
 
 
@@ -90,7 +99,7 @@ def phase_massifs(cfg):
                         f'{p["azimuth_deg"]:.3f}', f'{p["distance_m"]:.0f}', m.name, f'{d:.2f}'))
     out = os.path.join(cfg['paths']['output_dir'], 'peaks_massifs.csv')
     fields = ('osm_id', 'name', 'lat', 'lon', 'ele', 'wikidata', 'azimuth_deg',
-              'distance_m', 'massif', 'massif_candidates')
+              'distance_m', 'massif', 'massif_candidates', 'massif_snap_km')
     with open(out, 'w', newline = '') as f:
         w = csv.DictWriter(f, fieldnames = fields, extrasaction = 'ignore')
         w.writeheader()
@@ -100,10 +109,74 @@ def phase_massifs(cfg):
     print(f'\nWrote {out}')
 
 
+def fmt(v):
+    if isinstance(v, float):
+        return '' if v != v else f'{v:.4f}'
+    return v
+
+
+def phase_scores(cfg):
+    peaks   = peaks_mod.load(cfg)
+    massifs = massifs_mod.load(cfg)
+    massifs_mod.assign(peaks, massifs, cfg)
+
+    print('Render (image + distance map), or the cached one:')
+    pano = render_mod.get(cfg)
+    print(f'  {pano.width}x{pano.height} px, {1/pano.deg_per_px:g} px/deg, '
+          f'az {pano.az_lo:.2f}-{pano.az_from_x(pano.width-0.5):.2f}, '
+          f'viewer_z {pano.viewer_z:.1f} m')
+
+    scored  = scoring.score_peaks(peaks, pano, cfg)
+    s       = cfg['score']
+    visible = [q for q in scored if not q['hidden']]
+    kept    = [q for q in scored if q['score'] > 0]
+    print(f'{len(scored)} named peaks in the view: {len(visible)} visible, '
+          f'{len(scored) - len(visible)} hidden; {len(kept)} with a nonzero score '
+          f'(prominence >= {s["prom_min_px"]:g} px)')
+    print(f'Wikidata: {sum(1 for q in kept if q["wikidata"])} of them have an item, '
+          f'max sitelinks {max((q["sitelinks"] for q in kept), default = 0)}')
+
+    # Alignment between the OSM peak, projected with the renderer's
+    # geometry, and the rendered summit found nearby
+    import statistics
+    dx = [abs(q['dx_px']) for q in kept]
+    dy = [abs(q['dy_px']) for q in kept]
+    if kept:
+        print(f'Alignment OSM -> rendered summit, scored peaks: |dx| median {statistics.median(dx):.1f} px, '
+              f'p90 {sorted(dx)[int(0.9*len(dx))]:.1f}; |dy| median {statistics.median(dy):.1f} px, '
+              f'p90 {sorted(dy)[int(0.9*len(dy))]:.1f}')
+
+    kept.sort(key = lambda q: -q['score'])
+    print(f'\nTop {cfg["validation"]["top_n"]} scores:')
+    print(f'  {"":3s} {"name":34s} {"massif":24s} {"ele":>5s} {"km":>4s} {"prom":>5s} {"clear":>5s} {"links":>5s} {"score":>5s}')
+    for i, q in enumerate(kept[:cfg['validation']['top_n']]):
+        print(f'  {i+1:3d} {q["name"][:34]:34s} {q["massif"][:24]:24s} {q["ele"]:5.0f} '
+              f'{q["distance_m"]/1000:4.0f} {q["prom_px"]:5.0f} {q["clearance_px"]:5.0f} '
+              f'{q["sitelinks"]:5d} {q["score"]:5.3f}')
+
+    print('\nValidation peaks:')
+    rank = {id(q): i+1 for i, q in enumerate(kept)}
+    for name in cfg['validation']['peaks']:
+        for q in (q for q in scored if q['name'] == name):
+            print(f'  {name:28s} {q["massif"][:22]:22s} rank {rank.get(id(q), "-"):>4} '
+                  f'score {q["score"]:.3f}  prom {q["prom_px"]:6.1f} px  clear {q["clearance_px"]:6.1f} px  '
+                  f'{"HIDDEN" if q["hidden"] else "visible"}  dx {q["dx_px"]:+.1f} dy {q["dy_px"]:+.1f} px')
+        if not any(q['name'] == name for q in scored):
+            print(f'  {name:28s} (not in the view window)')
+
+    out = os.path.join(cfg['paths']['output_dir'], 'peaks_scored.csv')
+    with open(out, 'w', newline = '') as f:
+        w = csv.writer(f)
+        w.writerow(scoring.CSV_FIELDS)
+        for q in sorted(scored, key = lambda q: -q['score']):
+            w.writerow([fmt(q.get(k, '')) for k in scoring.CSV_FIELDS])
+    print(f'\nWrote {out}')
+
+
 def main():
     args = parse_args()
     cfg  = config.load(args.config)
-    {'massifs': phase_massifs}[args.phase](cfg)
+    {'massifs': phase_massifs, 'scores': phase_scores}[args.phase](cfg)
 
 
 if __name__ == '__main__':
