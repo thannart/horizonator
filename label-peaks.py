@@ -25,6 +25,9 @@ by phase, each one a subcommand:
   plans     group the massifs into depth planes, and lay out the bands of
             label rows above the skyline (labeling/planes.py); fills the
             plan column of peaks_scored.csv
+  select    choose the labels and their rows (labeling/selection.py:
+            integer program with PuLP/CBC, greedy fallback); writes
+            labels_selected.csv and a debug preview labels_preview.png
 
 The peak list comes from query-peaks-from-osm.py --json, the massif outlines
 from a GeoJSON file; all paths and parameters are in labeling/labeling.toml
@@ -34,12 +37,13 @@ from a GeoJSON file; all paths and parameters are in labeling/labeling.toml
 import argparse
 import collections
 import csv
+import math
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from labeling import config, geometry, massifs as massifs_mod, peaks as peaks_mod
-from labeling import render as render_mod, scoring, text, planes as planes_mod
+from labeling import render as render_mod, scoring, text, planes as planes_mod, selection
 
 
 def parse_args():
@@ -47,7 +51,7 @@ def parse_args():
                                      formatter_class = argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--config', default = None,
                         help = 'Configuration file (default: labeling/labeling.toml)')
-    parser.add_argument('phase', choices = ('massifs', 'scores', 'plans'))
+    parser.add_argument('phase', choices = ('massifs', 'scores', 'plans', 'select'))
     return parser.parse_args()
 
 
@@ -226,10 +230,108 @@ def phase_plans(cfg):
     write_scored(scored, cfg)
 
 
+def preview(pano, chosen, lay, cfg, path):
+    '''Debug picture of the selection: the render, padded with sky on top,
+    label boxes (one color per plane), leader lines and names. Not the
+    final look (that's phase 5)'''
+    import cairo
+    import numpy as np
+    pad = int(math.ceil(lay['sky_needed_px']))
+    W, H = pano.width, pano.height + pad
+    argb = np.zeros((H, W, 4), np.uint8)
+    argb[:pad] = (235, 225, 210, 255)                     # pale sky, BGRA
+    argb[pad:, :, :3] = pano.image                        # BGR, as cairo wants
+    argb[pad:, :, 3] = 255
+    surf = cairo.ImageSurface.create_for_data(argb, cairo.FORMAT_ARGB32, W, H)
+    cr   = cairo.Context(surf)
+    cr.translate(0, pad)
+    colors = [(0.85, 0.37, 0.0), (0.0, 0.45, 0.70), (0.0, 0.62, 0.45), (0.80, 0.47, 0.65)]
+    cr.select_font_face(cfg['labels']['font_family'])
+    cr.set_font_size(cfg['labels']['name_size_px'])
+    for p in chosen:
+        c = colors[p.q['plan'] % len(colors)]
+        cr.set_source_rgb(*c)
+        cr.set_line_width(1.5)
+        cr.move_to(p.xc, p.peak_y)
+        cr.line_to(p.xc, p.y)
+        cr.stroke()
+        cr.rectangle(p.x0, p.top, p.x1 - p.x0, p.y - p.top)
+        cr.stroke()
+        cr.save()
+        cr.translate(p.xc + cfg['labels']['name_size_px']/3, p.y - 4)
+        cr.rotate(-math.pi/2)
+        cr.set_source_rgb(0, 0, 0)
+        cr.move_to(0, 0)
+        cr.show_text(p.q['name'])
+        cr.restore()
+    surf.write_to_png(path)
+
+
+def phase_select(cfg):
+    pano, scored = compute_scores(cfg)
+    planes = planes_mod.group(scored, cfg)
+    lay    = planes_mod.layout(planes, scored, pano, text.Metrics(cfg), cfg)
+    chosen, info = selection.select(scored, lay, cfg)
+    labelable = [q for q in scored if q['score'] > 0]
+    sel = cfg['selection']
+
+    print(f'\n{info["placements"]} candidate placements for {len(labelable)} labelable peaks, '
+          f'{info["conflicts"]} conflicting pairs; solver: {info["status"]}')
+    print(f'{len(chosen)} labels selected (row spacing {lay["spacing"]:.0f} px, '
+          f'{len(lay["rows"])} rows)')
+    chosen_q = {id(p.q): p for p in chosen}
+    for p in planes:
+        n = sum(1 for c in chosen if c.q['plan'] == p['index'])
+        tot = sum(1 for q in labelable if q['plan'] == p['index'])
+        print(f'\n  Plane {p["index"]+1} ({p["d_min"]/1000:.0f}-{p["d_max"]/1000:.0f} km): {n}/{tot} labeled')
+        for m in p['massifs'] + [cfg['massifs']['outside_name']]:
+            mq = [q for q in labelable if q['massif'] == m and q['plan'] == p['index']]
+            if not mq:
+                continue
+            got = sorted((q for q in mq if id(q) in chosen_q), key = lambda q: -q['score'])
+            main = sum(1 for q in got if chosen_q[id(q)].row == lay['main_row'].get(m))
+            print(f'    {m:30s} {len(got):3d}/{len(mq):<3d} (main row: {main})  ' +
+                  ', '.join(q['name'] for q in got[:6]) + (' ...' if len(got) > 6 else ''))
+    empty = [m for m in {q['massif'] for q in labelable} if not any(c.q['massif'] == m for c in chosen)]
+    if empty:
+        print(f'\nMassifs left without a label: {", ".join(empty)}')
+    cap = sel['massif_cap_fraction'] * len(chosen)
+    print(f'Largest massif share: {max(collections.Counter(c.q["massif"] for c in chosen).values())} '
+          f'labels (cap {cap:.1f})')
+
+    best_dropped = sorted((q for q in labelable if id(q) not in chosen_q), key = lambda q: -q['score'])
+    print('\nBest-scored peaks NOT labeled (no room): ' +
+          ', '.join(f'{q["name"]} ({q["score"]:.2f})' for q in best_dropped[:10]))
+    print('\nValidation peaks:')
+    for name in cfg['validation']['peaks']:
+        q = next((q for q in scored if q['name'] == name), None)
+        if q is None:
+            continue
+        state = (f'LABELED, row {chosen_q[id(q)].row}' if id(q) in chosen_q else
+                 'not labeled: ' + (q['reason'] or 'no room'))
+        print(f'  {name:28s} {state}')
+
+    out = os.path.join(cfg['paths']['output_dir'], 'labels_selected.csv')
+    with open(out, 'w', newline = '') as f:
+        w = csv.writer(f)
+        w.writerow(('name', 'massif', 'plan', 'row', 'main_row', 'x', 'y_row', 'y_peak',
+                    'label_length', 'label_thickness', 'score', 'ele', 'distance_m'))
+        for p in sorted(chosen, key = lambda p: p.xc):
+            w.writerow((p.q['name'], p.q['massif'], p.q['plan'], p.row, lay['main_row'].get(p.q['massif'], ''),
+                        p.xc, f'{p.y:.1f}', f'{p.peak_y:.1f}', f'{p.q["label_length"]:.1f}',
+                        f'{p.q["label_thickness"]:.1f}', f'{p.q["score"]:.4f}', p.q['ele'],
+                        f'{p.q["distance_m"]:.0f}'))
+    png = os.path.join(cfg['paths']['output_dir'], 'labels_preview.png')
+    preview(pano, chosen, lay, cfg, png)
+    print(f'\nWrote {out}\nWrote {png} (debug preview)')
+    write_scored(scored, cfg)
+
+
 def main():
     args = parse_args()
     cfg  = config.load(args.config)
-    {'massifs': phase_massifs, 'scores': phase_scores, 'plans': phase_plans}[args.phase](cfg)
+    {'massifs': phase_massifs, 'scores': phase_scores, 'plans': phase_plans,
+     'select': phase_select}[args.phase](cfg)
 
 
 if __name__ == '__main__':

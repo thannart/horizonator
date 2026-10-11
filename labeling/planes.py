@@ -72,7 +72,7 @@ def layout(planes, scored, pano, metrics, cfg):
     for q in labelable:
         q['label_length'], q['label_thickness'] = metrics.size(q)
 
-    spacing = pl['row_spacing_px'] or float(np.percentile(
+    spacing = pl['row_spacing_px'] or pl['row_spacing_factor'] * float(np.percentile(
         [q['label_length'] for q in labelable], pl['row_spacing_percentile']))
 
     order = sorted(planes, key = lambda p: p['index'],

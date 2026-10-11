@@ -147,8 +147,11 @@ skyline_gap_px = 40
 # label text is vertical and grows UP from its row: this is set from the
 # label lengths (see the phase 3 report)
 row_spacing_px = 0
-# If row_spacing_px is 0: use this percentile of the label lengths
+# If row_spacing_px is 0: this fraction of that percentile of the label
+# lengths. Below 1, a label can reach up into the rows above it: phase 4
+# checks collisions as 2D rectangles, not row by row
 row_spacing_percentile = 90
+row_spacing_factor     = 0.5
 
 # Label text (phase 3 measures it; phase 5 draws it). Sizes in final
 # image pixels
@@ -162,3 +165,21 @@ line_spacing    = 1.25
 show_massif_abbrev = false
 # Horizontal margin (px) added on each side of a label's footprint
 margin_px       = 4
+
+# Phase 4: which labels to show, and in which row
+[selection]
+# "pulp" (integer linear program, CBC) or "greedy" (also the fallback if
+# PuLP isn't installed)
+solver               = "pulp"
+time_limit_s         = 120
+# Objective bonus for a label in its massif's main row
+main_row_bonus       = 0.05
+# Penalty for a visible massif left without any label (soft constraint)
+massif_min_penalty   = 10.0
+# No massif may have more than this fraction of all the labels
+massif_cap_fraction  = 0.30
+# Minimum horizontal/vertical gap (px) between two label boxes
+box_gap_px           = 2
+# A label's row must be at least this far (px) above its peak (room for
+# the leader line)
+min_leader_px        = 10
