@@ -43,14 +43,46 @@ class Metrics:
             out.append((abbrev, lab['alt_size_px'], False))
         return out
 
+    def _ink(self, text, size, italic):
+        '''(above, below): how far the text's ink reaches above and below
+        its baseline'''
+        set_font(self.cr, self.cfg, size, italic)
+        e = self.cr.text_extents(text)
+        return -e.y_bearing, e.y_bearing + e.height
+
+    def layout(self, peak):
+        '''The label's lines across its thickness: returns (thickness,
+        [(text, size, italic, baseline)]), baseline being the offset of
+        each line's baseline from the box's left edge (the text is rotated
+        90 deg, read bottom-up: "above the baseline" is to the left).
+
+        Laid out from the ink: the margin, then the first line's ink above
+        its baseline, its ink below, the gap, the next line... and the
+        margin again: the same visible space on both sides. A name line
+        uses the extents of [labels] name_top_chars/name_bottom_chars, so
+        all names get the same thickness; the other lines (altitude digits,
+        abbreviation) their own text's'''
+        lab, out = self.cfg, []
+        x = lab['margin_px']
+        for i, (t, size, italic) in enumerate(self.lines(peak)):
+            if i == 0:
+                above = self._ink(lab['name_top_chars'], size, italic)[0]
+                below = max(0.0, self._ink(lab['name_bottom_chars'], size, italic)[1])
+            else:
+                above, below = self._ink(t, size, italic)
+                below = max(0.0, below)
+            if i > 0:
+                x += lab['line_gap_px']
+            out.append((t, size, italic, x + above))
+            x += above + below
+        return x + lab['margin_px'], out
+
     def size(self, peak):
         '''(length, thickness) of the label box in pixels. The text is
         rotated 90 deg (read bottom-up): length is vertical (the longest
         line, plus the padding and the rounded end at each end), thickness
-        horizontal (the stacked lines, plus the margins on each side) -- its
-        horizontal footprint'''
-        lines  = self.lines(peak)
-        thick  = sum(s * self.cfg['line_spacing'] for _, s, _ in lines) + 2*self.cfg['margin_px']
-        length = (max(self._width(t, s, i) for t, s, i in lines) +
+        horizontal (see layout()) -- its horizontal footprint'''
+        thick, lines = self.layout(peak)
+        length = (max(self._width(t, s, i) for t, s, i, _ in lines) +
                   2*(self.pad + end_radius(self.cfg, thick)))
         return length, thick

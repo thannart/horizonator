@@ -162,8 +162,16 @@ row_spacing_factor     = 0.5
 font_family     = "DejaVu Sans"
 name_size_px    = 22
 alt_size_px     = 12
-# Line advance, as a multiple of each line's font size
-line_spacing    = 1.25
+# The label's thickness (its horizontal footprint, the text being rotated)
+# is laid out from the glyphs' actual ink, not from fixed line slots: same
+# visible margin on both sides (above the name's tallest glyphs, below the
+# altitude's digits), and this gap (px) between the lines' ink
+line_gap_px     = 2
+# Characters whose ink sets the tallest / lowest extent of a name line
+# (accented capitals, ascenders / descenders), so that every name label
+# gets the same thickness whatever its letters
+name_top_chars    = "ÉÂÔÀlhd"
+name_bottom_chars = "gjpqy"
 # The altitude is in italics. Only the upright and bold DejaVu Sans faces
 # are installed here: asking cairo for italic silently gave upright text.
 # So the italic is synthesized by slanting the glyphs (horizontal shear of
@@ -174,8 +182,9 @@ italic_shear    = 0.21
 shape           = "pill"
 # Optional third line: 3-letter massif abbreviation
 show_massif_abbrev = false
-# Horizontal margin (px) added on each side of a label's footprint
-margin_px       = 4
+# Visible margin (px) between the text's ink and the box, on each side of
+# the label's thickness
+margin_px       = 3
 
 # Phase 4: which labels to show, and in which row
 [selection]

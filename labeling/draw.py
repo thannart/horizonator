@@ -138,21 +138,18 @@ def label_box(cr, p, c, metrics, cfg):
     box_path(cr, p.x0, p.top, p.x1, p.y, r)
     cr.fill()
     cr.set_source_rgb(*text_color(c))
-    x = p.x0 + lab['margin_px']
-    for t, size, italic in metrics.lines(p.q):
+    _, lines = metrics.layout(p.q)
+    for t, size, italic, baseline in lines:
         text.set_font(cr, lab, size, italic)
-        line = size * lab['line_spacing']
-        # rotated -90 deg: the glyphs' ascent points left, so the baseline
-        # sits right of the line's left edge
-        ascent = cr.font_extents()[0]
         cr.save()
-        # the text starts above the bottom rounded end
-        cr.translate(x + (line - size)/2 + ascent, p.y - d['text_pad_px'] - r)
+        # rotated -90 deg: the baselines are vertical, at their offsets
+        # from the box's left edge (metrics.layout()); the text starts
+        # above the bottom rounded end
+        cr.translate(p.x0 + baseline, p.y - d['text_pad_px'] - r)
         cr.rotate(-math.pi/2)
         cr.move_to(0, 0)
         cr.show_text(t)
         cr.restore()
-        x += line
 
 
 def frame(pano, chosen, cfg):
