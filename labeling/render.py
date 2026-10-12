@@ -57,9 +57,24 @@ def _layout(cfg):
                 height = r['height_px'], ntiles = ntiles, tile_w = tile_w)
 
 
+def _renderer_fingerprint():
+    '''Hash of the compiled renderer library the bindings load (shaders
+    included: they're compiled in), so that any change to the renderer
+    invalidates the cached renders, not only a change of configuration'''
+    import horizonator
+    lib = os.path.realpath(horizonator.__file__)
+    h = hashlib.sha1()
+    for path in (lib, os.path.join(os.path.dirname(lib), 'libhorizonator.so')):
+        if os.path.exists(path):
+            with open(os.path.realpath(path), 'rb') as f:
+                h.update(f.read())
+    return h.hexdigest()
+
+
 def _cache_key(cfg):
     keyed = dict(view = cfg['view'], render = cfg['render'],
-                 margin = cfg['score']['margin_deg'])
+                 margin = cfg['score']['margin_deg'],
+                 renderer = _renderer_fingerprint())
     return hashlib.sha1(json.dumps(keyed, sort_keys = True).encode()).hexdigest()[:12]
 
 
