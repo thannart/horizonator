@@ -161,9 +161,17 @@ row_spacing_factor     = 0.5
 [labels]
 font_family     = "DejaVu Sans"
 name_size_px    = 22
-alt_size_px     = 16
+alt_size_px     = 12
 # Line advance, as a multiple of each line's font size
 line_spacing    = 1.25
+# The altitude is in italics. Only the upright and bold DejaVu Sans faces
+# are installed here: asking cairo for italic silently gave upright text.
+# So the italic is synthesized by slanting the glyphs (horizontal shear of
+# the font matrix, as a fraction of the font size); 0 = upright
+italic_shear    = 0.21
+# Label box shape: "pill" (oblong: rectangle with semicircular ends) or
+# "rect". The text is kept clear of the rounded ends
+shape           = "pill"
 # Optional third line: 3-letter massif abbreviation
 show_massif_abbrev = false
 # Horizontal margin (px) added on each side of a label's footprint

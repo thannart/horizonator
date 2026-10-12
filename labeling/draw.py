@@ -9,6 +9,8 @@ import math
 import cairo
 import numpy as np
 
+from . import text
+
 
 def hex_rgb(h):
     h = h.lstrip('#')
@@ -114,26 +116,38 @@ def leader(cr, p):
     cr.stroke()
 
 
+def box_path(cr, x0, y0, x1, y1, r):
+    '''A box path with rounded ends of radius r (r = half the width: an
+    oblong pill, rounded at the top and bottom); r = 0: a plain rectangle'''
+    if r <= 0:
+        cr.rectangle(x0, y0, x1 - x0, y1 - y0)
+        return
+    xm = (x0 + x1) / 2
+    cr.new_sub_path()
+    cr.arc(xm, y0 + r, r, math.pi, 2*math.pi)       # top end
+    cr.arc(xm, y1 - r, r, 0, math.pi)               # bottom end
+    cr.close_path()
+
+
 def label_box(cr, p, c, metrics, cfg):
     '''One label: box in color c, text rotated 90 deg (bottom-up), name
     then altitude (italic, smaller)'''
     d, lab = cfg['draw'], cfg['labels']
+    r = text.end_radius(lab, p.x1 - p.x0)
     cr.set_source_rgb(*c)
-    cr.rectangle(p.x0, p.top, p.x1 - p.x0, p.y - p.top)
+    box_path(cr, p.x0, p.top, p.x1, p.y, r)
     cr.fill()
     cr.set_source_rgb(*text_color(c))
     x = p.x0 + lab['margin_px']
     for t, size, italic in metrics.lines(p.q):
-        cr.select_font_face(lab['font_family'],
-                            cairo.FONT_SLANT_ITALIC if italic else cairo.FONT_SLANT_NORMAL,
-                            cairo.FONT_WEIGHT_NORMAL)
-        cr.set_font_size(size)
+        text.set_font(cr, lab, size, italic)
         line = size * lab['line_spacing']
         # rotated -90 deg: the glyphs' ascent points left, so the baseline
         # sits right of the line's left edge
         ascent = cr.font_extents()[0]
         cr.save()
-        cr.translate(x + (line - size)/2 + ascent, p.y - d['text_pad_px'])
+        # the text starts above the bottom rounded end
+        cr.translate(x + (line - size)/2 + ascent, p.y - d['text_pad_px'] - r)
         cr.rotate(-math.pi/2)
         cr.move_to(0, 0)
         cr.show_text(t)
