@@ -9,7 +9,7 @@ import math
 import cairo
 import numpy as np
 
-from . import text
+from . import text, ridges
 
 
 def hex_rgb(h):
@@ -164,12 +164,29 @@ def frame(pano, chosen, cfg):
     return x0, y0, x1 - x0, min(y1, pano.height) - y0
 
 
-def write(pano, chosen, lay, planes, metrics, cfg, svg_path, png_path):
+def write(pano, chosen, lay, planes, metrics, cfg, svg_path, png_path, massifs = None):
     colors, nb = massif_colors(chosen, pano, cfg)
     fx, fy, W, H = frame(pano, chosen, cfg)
 
+    # Crest line of each labeled massif, in its label color
+    crests = {}
+    if cfg['draw']['massif_ridges'] and massifs:
+        names = [m for m in colors if m != cfg['massifs']['outside_name']]
+        grid, transform = ridges.massif_raster(massifs, names, cfg)
+        ids, rng = ridges.pixel_massifs(pano, fx, fy, W, H, grid, transform, cfg)
+        crests = {names[i-1]: mask for i, mask in ridges.crest_masks(ids, rng, len(names), cfg).items()}
+
     svg = cairo.SVGSurface(svg_path, W, H)
     cr  = cairo.Context(svg)
+    for name, mask in crests.items():
+        # one path per crest run: 1-px rectangles would bloat the SVG, so
+        # the crest pixels go in as one image per massif
+        rgba = np.zeros((H, W, 4), np.uint8)
+        b, g, r = (int(round(c*255)) for c in reversed(colors[name]))
+        rgba[mask] = (b, g, r, 255)
+        img = cairo.ImageSurface.create_for_data(rgba, cairo.FORMAT_ARGB32, W, H)
+        cr.set_source_surface(img, 0, 0)
+        cr.paint()
     cr.translate(-fx, -fy)
     draw(cr, chosen, lay, planes, colors, metrics, cfg)
     svg.finish()
@@ -177,6 +194,8 @@ def write(pano, chosen, lay, planes, metrics, cfg, svg_path, png_path):
     bgra = np.zeros((H, W, 4), np.uint8)
     bgra[:, :, :3] = pano.image[fy:fy+H, fx:fx+W]        # BGR, as cairo wants
     bgra[:, :, 3]  = 255
+    for name, mask in crests.items():
+        bgra[mask, :3] = [int(round(c*255)) for c in reversed(colors[name])]
     surf = cairo.ImageSurface.create_for_data(bgra, cairo.FORMAT_ARGB32, W, H)
     cr   = cairo.Context(surf)
     cr.translate(-fx, -fy)

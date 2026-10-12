@@ -71,23 +71,46 @@ def _renderer_fingerprint():
     return h.hexdigest()
 
 
-def _cache_key(cfg):
-    keyed = dict(view = cfg['view'], render = cfg['render'],
+def _family_key(cfg):
+    '''Cache key of everything but the height: renders of one family differ
+    only by how much is above/below the horizon (the middle row), so a
+    taller one contains any shorter one exactly, cropped about its middle'''
+    render = {k: v for k, v in cfg['render'].items() if k != 'height_px'}
+    keyed = dict(view = cfg['view'], render = render,
                  margin = cfg['score']['margin_deg'],
                  renderer = _renderer_fingerprint())
     return hashlib.sha1(json.dumps(keyed, sort_keys = True).encode()).hexdigest()[:12]
 
 
+def _cached(out, family):
+    '''[(height, base path)] of the cached renders of this family'''
+    found = []
+    for name in os.listdir(out) if os.path.isdir(out) else ():
+        if name.startswith(f'render_{family}_') and name.endswith('.json'):
+            base = os.path.join(out, name[:-5])
+            if all(os.path.exists(base + ext) for ext in ('_image.npy', '_ranges.npy')):
+                with open(base + '.json') as f:
+                    found.append((json.load(f)['height'], base))
+    return sorted(found)
+
+
 def get(cfg):
-    '''The Panorama for this configuration: from the cache if it's there,
-    rendered (and cached) otherwise'''
-    out  = cfg['paths']['output_dir']
-    key  = _cache_key(cfg)
-    base = os.path.join(out, f'render_{key}')
-    if all(os.path.exists(base + ext) for ext in ('.json', '_image.npy', '_ranges.npy')):
-        with open(base + '.json') as f:
-            meta = json.load(f)
-        return Panorama(np.load(base + '_image.npy'), np.load(base + '_ranges.npy'), meta)
+    '''The Panorama for this configuration: cropped from the cached render
+    of the same family if one is at least as tall (with the same parity, so
+    the horizon stays the exact middle row), rendered (and cached, replacing
+    the shorter ones of the family) otherwise'''
+    out    = cfg['paths']['output_dir']
+    family = _family_key(cfg)
+    H      = cfg['render']['height_px']
+    for h, base in _cached(out, family):
+        if h >= H and (h - H) % 2 == 0:
+            with open(base + '.json') as f:
+                meta = json.load(f)
+            off = (h - H) // 2
+            meta['height'] = H
+            return Panorama(np.array(np.load(base + '_image.npy',  mmap_mode = 'r')[off:off+H]),
+                            np.array(np.load(base + '_ranges.npy', mmap_mode = 'r')[off:off+H]),
+                            meta)
 
     import horizonator
 
@@ -122,7 +145,14 @@ def get(cfg):
                 refraction_k = r['refraction_k'])
     pano = Panorama(np.concatenate(images, axis = 1),
                     np.concatenate(ranges, axis = 1).astype(np.float32), meta)
+    # The shorter renders of the family are now redundant: drop them (each
+    # one is hundreds of MB)
+    for h, old in _cached(out, family):
+        if h < lay['height']:
+            for ext in ('.json', '_image.npy', '_ranges.npy'):
+                os.remove(old + ext)
     os.makedirs(out, exist_ok = True)
+    base = os.path.join(out, f'render_{family}_{lay["height"]}')
     np.save(base + '_image.npy',  pano.image)
     np.save(base + '_ranges.npy', pano.ranges)
     with open(base + '.json', 'w') as f:

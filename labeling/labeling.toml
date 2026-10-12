@@ -246,6 +246,20 @@ outside_color          = "#999999"
 svg_name               = "labels_overlay.svg"
 png_name               = "labels_composite.png"
 
+# Crest line of each massif, in its label color: the upper edge of the
+# massif's visible terrain, where above it is sky or the terrain of another
+# massif farther away. Shows which plane stands in front of which
+# (Chartreuse in front of Belledonne in front of the Grandes Rousses...)
+massif_ridges          = true
+ridge_width_px         = 3
+# A pixel of massif A under a pixel of another massif B is A's crest only
+# if B's terrain is at least this much farther: else it's just the two
+# polygons' boundary running across one continuous slope
+ridge_depth_jump_m     = 1000.0
+# Resolution (deg) of the raster of the massif polygons used to tell which
+# massif each rendered pixel shows
+massif_raster_deg      = 0.0005
+
 # 3-letter massif abbreviations, for [labels] show_massif_abbrev
 [massifs.abbrev]
 "Vercors" = "VER"

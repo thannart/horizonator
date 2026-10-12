@@ -177,7 +177,7 @@ def solve_pulp(P, pairs, lay, cfg):
 
     status = prob.solve(pulp.PULP_CBC_CMD(msg = False, timeLimit = sel['time_limit_s']))
     chosen = [P[i] for i in range(len(P)) if (x[i].value() or 0) > 0.5]
-    return chosen, pulp.LpStatus[status]
+    return chosen, pulp.LpSolution[prob.sol_status]
 
 
 def solve_greedy(P, pairs, lay, cfg):

@@ -92,7 +92,7 @@ def select_max(cands, rows, cfg):
     for a, b in pairs:
         prob += x[a] + x[b] <= 1
     status = prob.solve(pulp.PULP_CBC_CMD(msg = False, timeLimit = cfg['selection']['time_limit_s']))
-    return [P[i] for i in range(len(P)) if (x[i].value() or 0) > 0.5], pulp.LpStatus[status]
+    return [P[i] for i in range(len(P)) if (x[i].value() or 0) > 0.5], pulp.LpSolution[prob.sol_status]
 
 
 def write_png(pano, massif, chosen, cands, metrics, cfg, path):

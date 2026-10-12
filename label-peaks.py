@@ -362,7 +362,8 @@ def phase_draw(cfg):
     out = cfg['paths']['output_dir']
     svg = os.path.join(out, cfg['draw']['svg_name'])
     png = os.path.join(out, cfg['draw']['png_name'])
-    res = draw_mod.write(pano, chosen, lay, planes, metrics, cfg, svg, png)
+    res = draw_mod.write(pano, chosen, lay, planes, metrics, cfg, svg, png,
+                         massifs = massifs_mod.load(cfg))
 
     print(f'\n{len(chosen)} labels drawn; {info["status"]}')
     print(f'Image {res["width"]}x{res["height"]} px (render window x {res["x0"]}, y {res["y0"]})')
