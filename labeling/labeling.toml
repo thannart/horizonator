@@ -190,6 +190,15 @@ box_gap_px           = 2
 # A label's row must be at least this far (px) above its peak (room for
 # the leader line)
 min_leader_px        = 10
+# Kinked leader lines: a label may be shifted sideways by up to this many
+# label widths (plus the gap) from its peak; its leader then rises
+# vertically to elbow_px below the label, and runs straight to the label's
+# bottom center. 0: vertical leaders only
+max_offset_steps     = 2
+elbow_px             = 20
+# Relative objective cost per step of shift (x (1 - penalty*|steps|)), so
+# a straight leader is preferred when it fits
+offset_penalty       = 0.05
 
 # Phase 5: drawing
 [draw]

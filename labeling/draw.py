@@ -70,9 +70,7 @@ def draw(cr, chosen, lay, planes, colors, metrics, cfg):
     cr.set_line_width(d['leader_width_px'])
     for p in chosen:
         cr.set_source_rgb(*colors[p.q['massif']])
-        cr.move_to(p.xc, p.peak_y)
-        cr.line_to(p.xc, p.y)
-        cr.stroke()
+        leader(cr, p)
 
     # Massif names: once each, on a bar spanning its labels, just below the
     # lowest row of its plane's band
@@ -104,6 +102,16 @@ def draw(cr, chosen, lay, planes, colors, metrics, cfg):
 
     for p in chosen:
         label_box(cr, p, colors[p.q['massif']], metrics, cfg)
+
+
+def leader(cr, p):
+    '''A placement's leader line: up from the peak, then (for a label
+    shifted sideways) straight to the label's bottom center'''
+    (x, y), _ = p.segments[0]
+    cr.move_to(x, y)
+    for _, (x, y) in p.segments:
+        cr.line_to(x, y)
+    cr.stroke()
 
 
 def label_box(cr, p, c, metrics, cfg):

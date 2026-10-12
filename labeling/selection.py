@@ -1,75 +1,144 @@
 '''Phase 4: which peaks get a label, and in which row.
 
-A placement is (peak, row). Its label is a box centered on the peak's
-rendered azimuth, as wide as the label's stacked lines, standing on the row
-(text rotated 90 deg, growing up); its leader line runs vertically from the
-peak up to the row. Two placements conflict if their boxes overlap, or if
-one's leader line runs through the other's box.
+A placement is (peak, row, shift). Its label is a box as wide as the
+label's stacked lines, standing on the row (text rotated 90 deg, growing
+up), centered on the peak's rendered azimuth, or shifted sideways by a
+whole number of label widths. Its leader line rises vertically from the
+peak; if the label is shifted, it stops elbow_px below the label and runs
+straight to the label's bottom center (a kinked leader). Two placements
+conflict if their boxes overlap, if a segment of one's leader runs through
+the other's box, or if their leaders cross.
 
 Solved as an integer linear program (PuLP + CBC), maximizing the sum of the
 scores; greedy fallback in two passes if PuLP isn't available'''
 
-import math
+
+def _segment_hits_box(p, q, box):
+    '''Whether segment p-q touches the axis-aligned box (x0, y0, x1, y1)
+    (Liang-Barsky clipping)'''
+    x0, y0, x1, y1 = box
+    dx, dy = q[0] - p[0], q[1] - p[1]
+    t0, t1 = 0.0, 1.0
+    for d, lo, hi, v in ((dx, x0, x1, p[0]), (dy, y0, y1, p[1])):
+        if d == 0:
+            if v < lo or v > hi:
+                return False
+            continue
+        a, b = (lo - v) / d, (hi - v) / d
+        if a > b:
+            a, b = b, a
+        t0, t1 = max(t0, a), min(t1, b)
+        if t0 > t1:
+            return False
+    return True
+
+
+def _segments_cross(a, b, c, d):
+    '''Whether segments a-b and c-d intersect'''
+    def orient(p, q, r):
+        # float(): coordinates can be numpy scalars, whose booleans don't
+        # subtract
+        v = float((q[0]-p[0])*(r[1]-p[1]) - (q[1]-p[1])*(r[0]-p[0]))
+        return (v > 0) - (v < 0)
+    def on(p, q, r):
+        return min(p[0], q[0]) <= r[0] <= max(p[0], q[0]) and min(p[1], q[1]) <= r[1] <= max(p[1], q[1])
+    o1, o2, o3, o4 = orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b)
+    if o1 != o2 and o3 != o4:
+        return True
+    return ((o1 == 0 and on(a, b, c)) or (o2 == 0 and on(a, b, d)) or
+            (o3 == 0 and on(c, d, a)) or (o4 == 0 and on(c, d, b)))
 
 
 class Placement:
-    def __init__(self, q, row, y_row, cfg):
+    def __init__(self, q, row, y_row, cfg, shift = 0):
         sel = cfg['selection']
-        self.q    = q
-        self.row  = row
-        self.y    = y_row                       # bottom of the text
-        half      = q['label_thickness'] / 2
-        self.x0   = q['x_render'] - half
-        self.x1   = q['x_render'] + half
-        self.top  = y_row - q['label_length']
-        self.xc   = q['x_render']
+        self.q      = q
+        self.row    = row
+        self.shift  = shift                      # in label widths (+ gap)
+        self.y      = y_row                      # bottom of the text
+        self.gap    = sel['box_gap_px']
+        t           = q['label_thickness']
+        self.xc     = q['x_render']              # the peak
         self.peak_y = q['y_render']
-        self.gap  = sel['box_gap_px']
+        self.xl     = self.xc + shift * (t + self.gap)   # the label's center
+        self.x0     = self.xl - t/2
+        self.x1     = self.xl + t/2
+        self.top    = y_row - q['label_length']
+        self.y_elbow = y_row + (sel['elbow_px'] if shift else 0)
+        self.segments = [((self.xc, self.peak_y), (self.xc, self.y_elbow))]
+        if shift:
+            self.segments.append(((self.xc, self.y_elbow), (self.xl, self.y)))
+        # horizontal extent of the whole placement (box + leader)
+        self.bx0 = min(self.x0, self.xc)
+        self.bx1 = max(self.x1, self.xc)
+
+    def box(self, grow = 0.0):
+        return (self.x0 - grow, self.top - grow, self.x1 + grow, self.y + grow)
 
     def boxes_overlap(self, o):
         return (self.x0 < o.x1 + self.gap and o.x0 < self.x1 + self.gap and
                 self.top < o.y + self.gap and o.top < self.y + self.gap)
 
     def line_crosses(self, o):
-        '''Whether this placement's leader line (x = xc, from the row down to
-        the peak) runs through o's box'''
-        return (o.x0 - self.gap <= self.xc <= o.x1 + self.gap and
-                self.y < o.y and o.top < self.peak_y)
+        '''Whether a segment of this placement's leader runs through o's box'''
+        b = o.box(self.gap)
+        return any(_segment_hits_box(a, c, b) for a, c in self.segments)
+
+    def leaders_cross(self, o):
+        return any(_segments_cross(a, b, c, d)
+                   for a, b in self.segments for c, d in o.segments)
 
     def conflicts(self, o):
-        return self.boxes_overlap(o) or self.line_crosses(o) or o.line_crosses(self)
+        return (self.boxes_overlap(o) or self.line_crosses(o) or o.line_crosses(self) or
+                self.leaders_cross(o))
+
+
+def placements_for(q, rows, cfg):
+    '''Every allowed placement of peak q on the given (row index, y) rows:
+    each shift, on rows high enough above the peak (room for the leader,
+    and for the elbow of a kinked one)'''
+    sel  = cfg['selection']
+    n    = sel['max_offset_steps']
+    out  = []
+    for r, y in rows:
+        for k in range(-n, n + 1):
+            elbow = sel['elbow_px'] if k else 0
+            if y + elbow <= q['y_render'] - sel['min_leader_px']:
+                out.append(Placement(q, r, y, cfg, k))
+    return out
 
 
 def placements(scored, lay, cfg):
-    '''Every allowed (peak, row): the rows of its plane's band that are high
-    enough above the peak'''
+    '''Every allowed placement of every labelable peak, in the rows of its
+    plane's band'''
     out = []
     for q in scored:
-        if q['score'] <= 0:
-            continue
-        for r in lay['band_rows'][q['plan']]:
-            y = lay['rows'][r]
-            if y <= q['y_render'] - cfg['selection']['min_leader_px']:
-                out.append(Placement(q, r, y, cfg))
+        if q['score'] > 0:
+            out += placements_for(q, [(r, lay['rows'][r]) for r in lay['band_rows'][q['plan']]], cfg)
     return out
 
 
 def conflict_pairs(P):
     '''Index pairs (a, b), a < b, of conflicting placements of different
-    peaks. Sorted sweep on x to avoid testing far-apart pairs'''
-    order = sorted(range(len(P)), key = lambda i: P[i].x0)
-    # A leader line can only cross boxes in its own column, and boxes only
-    # overlap if their x ranges do: so x overlap (with the gap) is necessary
+    peaks. Sorted sweep on the placements' horizontal extents (box and
+    leader): two placements can only conflict if those overlap'''
+    order = sorted(range(len(P)), key = lambda i: P[i].bx0)
     pairs = []
     for ii, a in enumerate(order):
         pa = P[a]
         for b in order[ii+1:]:
             pb = P[b]
-            if pb.x0 > pa.x1 + pa.gap:
+            if pb.bx0 > pa.bx1 + pa.gap:
                 break
             if pa.q is not pb.q and pa.conflicts(pb):
                 pairs.append((min(a, b), max(a, b)))
     return pairs
+
+
+def shift_factor(p, cfg):
+    '''Objective factor of a placement's shift: a straight leader is
+    preferred when it fits'''
+    return 1.0 - cfg['selection']['offset_penalty'] * abs(p.shift)
 
 
 def _objective_weight(p, lay, cfg):
@@ -78,7 +147,7 @@ def _objective_weight(p, lay, cfg):
     # of bonus kept two minor labels against the Meije)
     sel   = cfg['selection']
     bonus = sel['main_row_bonus'] if lay['main_row'].get(p.q['massif']) == p.row else 0.0
-    return p.q['score'] ** sel['score_exponent'] * (1.0 + bonus)
+    return p.q['score'] ** sel['score_exponent'] * (1.0 + bonus) * shift_factor(p, cfg)
 
 
 def solve_pulp(P, pairs, lay, cfg):

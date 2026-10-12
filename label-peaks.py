@@ -264,13 +264,11 @@ def preview(pano, chosen, lay, cfg, path):
         c = colors[p.q['plan'] % len(colors)]
         cr.set_source_rgb(*c)
         cr.set_line_width(1.5)
-        cr.move_to(p.xc, p.peak_y)
-        cr.line_to(p.xc, p.y)
-        cr.stroke()
+        draw_mod.leader(cr, p)
         cr.rectangle(p.x0, p.top, p.x1 - p.x0, p.y - p.top)
         cr.stroke()
         cr.save()
-        cr.translate(p.xc + cfg['labels']['name_size_px']/3, p.y - 4)
+        cr.translate(p.xl + cfg['labels']['name_size_px']/3, p.y - 4)
         cr.rotate(-math.pi/2)
         cr.set_source_rgb(0, 0, 0)
         cr.move_to(0, 0)
@@ -326,11 +324,11 @@ def phase_select(cfg):
     out = os.path.join(cfg['paths']['output_dir'], 'labels_selected.csv')
     with open(out, 'w', newline = '') as f:
         w = csv.writer(f)
-        w.writerow(('name', 'massif', 'plan', 'row', 'main_row', 'x', 'y_row', 'y_peak',
+        w.writerow(('name', 'massif', 'plan', 'row', 'main_row', 'x', 'shift', 'x_label', 'y_row', 'y_peak',
                     'label_length', 'label_thickness', 'score', 'ele', 'distance_m'))
         for p in sorted(chosen, key = lambda p: p.xc):
             w.writerow((p.q['name'], p.q['massif'], p.q['plan'], p.row, lay['main_row'].get(p.q['massif'], ''),
-                        p.xc, f'{p.y:.1f}', f'{p.peak_y:.1f}', f'{p.q["label_length"]:.1f}',
+                        p.xc, p.shift, f'{p.xl:.1f}', f'{p.y:.1f}', f'{p.peak_y:.1f}', f'{p.q["label_length"]:.1f}',
                         f'{p.q["label_thickness"]:.1f}', f'{p.q["score"]:.4f}', p.q['ele'],
                         f'{p.q["distance_m"]:.0f}'))
     png = os.path.join(cfg['paths']['output_dir'], 'labels_preview.png')
@@ -433,12 +431,13 @@ def phase_massif(cfg, massif):
     csvp = os.path.join(out, cfg['focus']['csv_name'].format(slug = slug))
     with open(csvp, 'w', newline = '') as f:
         w = csv.writer(f)
-        w.writerow(('name', 'osm_id', 'ele', 'distance_m', 'status', 'prom_deg', 'score', 'shown', 'row'))
-        rowof = {p.q['osm_id']: p.row for p in chosen}
+        w.writerow(('name', 'osm_id', 'ele', 'distance_m', 'status', 'prom_deg', 'score', 'shown', 'row', 'shift'))
+        placed = {p.q['osm_id']: p for p in chosen}
         for q in sorted(cands, key = lambda q: q['x_render']):
+            p = placed.get(q['osm_id'])
             w.writerow((q['name'], q['osm_id'], q['ele'], f'{q["distance_m"]:.0f}', q['status'] or 'scored',
-                        f'{q["prom_deg"]:.4f}', f'{q["score"]:.4f}', q['osm_id'] in shown,
-                        rowof.get(q['osm_id'], '')))
+                        f'{q["prom_deg"]:.4f}', f'{q["score"]:.4f}', p is not None,
+                        p.row if p else '', p.shift if p else ''))
     print(f'\nWrote {png} ({W}x{H})\nWrote {csvp}')
 
 

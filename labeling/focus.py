@@ -74,14 +74,15 @@ def select_max(cands, rows, cfg):
     lower rows preferred (shorter leader lines). Same conflict rules as the
     normal selection'''
     import pulp
-    P = [selection.Placement(q, r, y, cfg)
-         for q in cands for r, y in enumerate(rows)
-         if y <= q['y_render'] - cfg['selection']['min_leader_px']]
+    P = [p for q in cands for p in selection.placements_for(q, list(enumerate(rows)), cfg)]
     pairs = selection.conflict_pairs(P)
     prob = pulp.LpProblem('focus', pulp.LpMaximize)
     x = [pulp.LpVariable(f'x{i}', cat = 'Binary') for i in range(len(P))]
     n = len(rows)
-    prob += pulp.lpSum((1.0 + 0.5*p.q['score'] + 0.01*(n - p.row)/n) * x[i]
+    # the count first (each label worth ~1), then the score, then a lower
+    # row (shorter leader), then a straight leader
+    prob += pulp.lpSum((1.0 + 0.5*p.q['score'] + 0.01*(n - p.row)/n) *
+                       selection.shift_factor(p, cfg) * x[i]
                        for i, p in enumerate(P))
     by_peak = {}
     for i, p in enumerate(P):
@@ -136,9 +137,7 @@ def write_png(pano, massif, chosen, cands, metrics, cfg, path):
     cr.set_line_width(d['leader_width_px'])
     for p in chosen:
         cr.set_source_rgb(*colors[p.q['status']])
-        cr.move_to(p.xc, p.peak_y)
-        cr.line_to(p.xc, p.y)
-        cr.stroke()
+        draw_mod.leader(cr, p)
     for p in chosen:
         draw_mod.label_box(cr, p, colors[p.q['status']], metrics, cfg)
     surf.write_to_png(path)
