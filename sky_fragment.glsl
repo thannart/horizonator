@@ -40,7 +40,11 @@ void main(void)
     float az_rad1 = radians(az_deg1);
     float az_ndc_per_rad = 2.0 / (az_rad1 - az_rad0);
 
-    float az = (az_rad0 + az_rad1) * 0.5 + ndc.x / az_ndc_per_rad * 0.5;
+    // Inverse of az_ndc = (az - az_center) * az_ndc_per_rad. This used to
+    // have an extra *0.5, mapping the viewport to only half its true
+    // azimuth span: the sun's warm wash then didn't line up between two
+    // adjacent tiles of a panorama (a visible step in the sky at each seam)
+    float az = (az_rad0 + az_rad1) * 0.5 + ndc.x / az_ndc_per_rad;
     float el = ndc.y / (aspect * az_ndc_per_rad);
 
     float cos_el = cos(el);
