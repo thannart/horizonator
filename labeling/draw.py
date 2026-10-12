@@ -102,31 +102,35 @@ def draw(cr, chosen, lay, planes, colors, metrics, cfg):
             cr.move_to(bx, y + d['massif_name_size_px']*0.35)
             cr.show_text(m)
 
-    # Labels: box in the massif color, text rotated 90 deg (bottom-up),
-    # name then altitude (italic, smaller)
     for p in chosen:
-        c = colors[p.q['massif']]
-        cr.set_source_rgb(*c)
-        cr.rectangle(p.x0, p.top, p.x1 - p.x0, p.y - p.top)
-        cr.fill()
-        cr.set_source_rgb(*text_color(c))
-        x = p.x0 + lab['margin_px']
-        for t, size, italic in metrics.lines(p.q):
-            cr.select_font_face(lab['font_family'],
-                                cairo.FONT_SLANT_ITALIC if italic else cairo.FONT_SLANT_NORMAL,
-                                cairo.FONT_WEIGHT_NORMAL)
-            cr.set_font_size(size)
-            line = size * lab['line_spacing']
-            # rotated -90 deg: the glyphs' ascent points left, so the
-            # baseline sits right of the line's left edge
-            ascent = cr.font_extents()[0]
-            cr.save()
-            cr.translate(x + (line - size)/2 + ascent, p.y - d['text_pad_px'])
-            cr.rotate(-math.pi/2)
-            cr.move_to(0, 0)
-            cr.show_text(t)
-            cr.restore()
-            x += line
+        label_box(cr, p, colors[p.q['massif']], metrics, cfg)
+
+
+def label_box(cr, p, c, metrics, cfg):
+    '''One label: box in color c, text rotated 90 deg (bottom-up), name
+    then altitude (italic, smaller)'''
+    d, lab = cfg['draw'], cfg['labels']
+    cr.set_source_rgb(*c)
+    cr.rectangle(p.x0, p.top, p.x1 - p.x0, p.y - p.top)
+    cr.fill()
+    cr.set_source_rgb(*text_color(c))
+    x = p.x0 + lab['margin_px']
+    for t, size, italic in metrics.lines(p.q):
+        cr.select_font_face(lab['font_family'],
+                            cairo.FONT_SLANT_ITALIC if italic else cairo.FONT_SLANT_NORMAL,
+                            cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(size)
+        line = size * lab['line_spacing']
+        # rotated -90 deg: the glyphs' ascent points left, so the baseline
+        # sits right of the line's left edge
+        ascent = cr.font_extents()[0]
+        cr.save()
+        cr.translate(x + (line - size)/2 + ascent, p.y - d['text_pad_px'])
+        cr.rotate(-math.pi/2)
+        cr.move_to(0, 0)
+        cr.show_text(t)
+        cr.restore()
+        x += line
 
 
 def frame(pano, chosen, cfg):

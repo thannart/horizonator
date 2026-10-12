@@ -32,6 +32,11 @@ by phase, each one a subcommand:
             same size and projection as the PNG, and the PNG composite
             (render + labels). Re-renders taller if the labels need more
             sky
+  massif NAME
+            one massif alone, with as many of its peak names as possible
+            (every visible one, even those the normal selection leaves
+            out), colored by status: to choose which ones to show.
+            Writes massif_NAME.png and massif_NAME.csv
 
 The peak list comes from query-peaks-from-osm.py --json, the massif outlines
 from a GeoJSON file; all paths and parameters are in labeling/labeling.toml
@@ -48,7 +53,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from labeling import config, geometry, massifs as massifs_mod, peaks as peaks_mod
 from labeling import render as render_mod, scoring, text, planes as planes_mod, selection
-from labeling import draw as draw_mod
+from labeling import draw as draw_mod, focus
 
 
 def parse_args():
@@ -56,7 +61,9 @@ def parse_args():
                                      formatter_class = argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--config', default = None,
                         help = 'Configuration file (default: labeling/labeling.toml)')
-    parser.add_argument('phase', choices = ('massifs', 'scores', 'plans', 'select', 'draw'))
+    parser.add_argument('phase', choices = ('massifs', 'scores', 'plans', 'select', 'draw', 'massif'))
+    parser.add_argument('name', nargs = '?', default = None,
+                        help = 'For "massif": the massif to show alone')
     return parser.parse_args()
 
 
@@ -384,9 +391,64 @@ def phase_draw(cfg):
     print(f'\nWrote {svg}\nWrote {png}')
 
 
+def phase_massif(cfg, massif):
+    '''One massif alone, with as many names as possible (labeling/focus.py)'''
+    def run():
+        pano, scored = compute_scores(cfg)
+        metrics = text.Metrics(cfg)
+        cands   = focus.candidates(scored, massif, pano, cfg)
+        if not cands:
+            sys.exit(f'No visible named peak in massif "{massif}" '
+                     f'(names: see peaks_massifs.csv)')
+        rows, spacing = focus.layout_rows(cands, pano, metrics, cfg)
+        chosen, status = focus.select_max(cands, rows, cfg)
+        return pano, scored, metrics, cands, rows, spacing, chosen, status
+
+    pano, scored, metrics, cands, rows, spacing, chosen, status = run()
+    missing = cfg['draw']['top_margin_px'] + 4*cfg['draw']['massif_name_size_px'] - min(p.top for p in chosen)
+    if missing > 0 and cfg['draw']['auto_sky']:
+        cfg['render']['height_px'] += 2 * int(math.ceil(missing))
+        print(f'\nThe labels need {missing:.0f} more px of sky: re-rendering '
+              f'{cfg["render"]["height_px"]} px high')
+        pano, scored, metrics, cands, rows, spacing, chosen, status = run()
+
+    hidden = [q for q in scored if q['massif'] == massif and q['hidden']]
+    shown  = {p.q['osm_id'] for p in chosen}
+    print(f'\n{massif}: {len(cands)} visible named peaks (after merging points on the same '
+          f'rendered summit), {len(hidden)} hidden; {len(chosen)} names placed on '
+          f'{len(rows)} rows (spacing {spacing:.0f} px); solver: {status}')
+    for k, label in focus.STATUS_LABELS.items():
+        qs = sorted((q for q in cands if q['status'] == k), key = lambda q: -q['ele'])
+        if qs:
+            print(f'\n  {label} ({len(qs)}):')
+            for q in qs:
+                print(f'    {"  " if q["osm_id"] in shown else "- "}{q["name"]:32s} {q["ele"]:5.0f} m '
+                      f'{q["distance_m"]/1000:5.1f} km  prom {q["prom_deg"]:.3f} deg'
+                      f'{"" if q["osm_id"] in shown else "   (pas de place)"}')
+
+    out  = cfg['paths']['output_dir']
+    slug = ''.join(c if c.isalnum() else '_' for c in massif.lower())
+    png  = os.path.join(out, cfg['focus']['png_name'].format(slug = slug))
+    W, H = focus.write_png(pano, massif, chosen, cands, metrics, cfg, png)
+    csvp = os.path.join(out, cfg['focus']['csv_name'].format(slug = slug))
+    with open(csvp, 'w', newline = '') as f:
+        w = csv.writer(f)
+        w.writerow(('name', 'osm_id', 'ele', 'distance_m', 'status', 'prom_deg', 'score', 'shown', 'row'))
+        rowof = {p.q['osm_id']: p.row for p in chosen}
+        for q in sorted(cands, key = lambda q: q['x_render']):
+            w.writerow((q['name'], q['osm_id'], q['ele'], f'{q["distance_m"]:.0f}', q['status'] or 'scored',
+                        f'{q["prom_deg"]:.4f}', f'{q["score"]:.4f}', q['osm_id'] in shown,
+                        rowof.get(q['osm_id'], '')))
+    print(f'\nWrote {png} ({W}x{H})\nWrote {csvp}')
+
+
 def main():
     args = parse_args()
     cfg  = config.load(args.config)
+    if args.phase == 'massif':
+        if not args.name:
+            sys.exit('massif: give the massif name, e.g. ./label-peaks.py massif Chartreuse')
+        return phase_massif(cfg, args.name)
     {'massifs': phase_massifs, 'scores': phase_scores, 'plans': phase_plans,
      'select': phase_select, 'draw': phase_draw}[args.phase](cfg)
 

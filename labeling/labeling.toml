@@ -249,3 +249,19 @@ png_name               = "labels_composite.png"
 "Bornes" = "BOR"
 "Mont-Blanc" = "MBL"
 "Hors liste" = "HL"
+
+# label-peaks.py massif NAME: one massif alone, with as many of its peak
+# names as possible, to choose which ones to show
+[focus]
+# Rows of labels (one band); the spacing follows [plans] row_spacing_*
+rows             = 6
+# Azimuth margin (deg) around the massif's labels in the cropped image
+crop_margin_deg  = 1.0
+# Box colors by status: what the normal selection would keep (by score),
+# and what it leaves out
+color_scored         = "#56B4E9"
+color_low_prominence = "#F0E442"
+color_not_summit     = "#CC79A7"
+color_too_close      = "#E69F00"
+png_name         = "massif_{slug}.png"
+csv_name         = "massif_{slug}.csv"
